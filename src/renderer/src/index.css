@@ -1,0 +1,199 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-void: #05080c;
+  --color-void-deep: #030507;
+  --color-panel: #081018;
+  --color-panel-raised: #0c1720;
+  --color-cyan: #00e5ff;
+  --color-cyan-bright: #7cffff;
+  --color-cyan-dim: #0a3a45;
+  --color-ink: #d8fbff;
+  --color-ink-dim: #6f9ca8;
+  --color-alert: #ff5c5c;
+  --color-warn: #ffb454;
+  --color-good: #4dffb0;
+
+  --font-display: 'Orbitron', 'Rajdhani', sans-serif;
+  --font-sans: 'Rajdhani', 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --animate-core-pulse: core-pulse 4s ease-in-out infinite;
+  --animate-ring-slow: ring-spin 40s linear infinite;
+  --animate-ring-slow-reverse: ring-spin-reverse 60s linear infinite;
+  --animate-scan: scan-sweep 6s linear infinite;
+  --animate-blink: hud-blink 2.4s ease-in-out infinite;
+  --animate-rise: rise-in 0.4s ease-out both;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-cyan-dim);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background-color: var(--color-void);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  ::selection {
+    background: var(--color-cyan);
+    color: var(--color-void);
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-cyan-dim);
+    border-radius: 2px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-cyan);
+  }
+}
+
+@utility text-glow {
+  text-shadow:
+    0 0 8px color-mix(in srgb, var(--color-cyan) 70%, transparent),
+    0 0 2px color-mix(in srgb, var(--color-cyan-bright) 60%, transparent);
+}
+
+@utility glow-cyan {
+  box-shadow:
+    0 0 18px color-mix(in srgb, var(--color-cyan) 18%, transparent),
+    0 0 1px color-mix(in srgb, var(--color-cyan-bright) 40%, transparent);
+}
+
+@utility hud-panel {
+  position: relative;
+  background: color-mix(in srgb, var(--color-panel) 82%, transparent);
+  backdrop-filter: blur(6px);
+  border: 1px solid color-mix(in srgb, var(--color-cyan) 16%, transparent);
+}
+
+@utility hud-corners {
+  position: relative;
+}
+
+@utility no-drag {
+  -webkit-app-region: no-drag;
+}
+
+@utility app-drag {
+  -webkit-app-region: drag;
+}
+
+@keyframes core-pulse {
+  0%,
+  100% {
+    opacity: 0.75;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.035);
+  }
+}
+
+@keyframes ring-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes ring-spin-reverse {
+  from {
+    transform: rotate(360deg);
+  }
+  to {
+    transform: rotate(0deg);
+  }
+}
+
+@keyframes scan-sweep {
+  0% {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  10% {
+    opacity: 0.7;
+  }
+  90% {
+    opacity: 0.7;
+  }
+  100% {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+}
+
+@keyframes hud-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.circuit-grid {
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--color-cyan) 6%, transparent) 1px, transparent 1px),
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--color-cyan) 6%, transparent) 1px,
+      transparent 1px
+    );
+  background-size: 48px 48px;
+}
+
+.radial-vignette {
+  background: radial-gradient(
+    ellipse at 50% 38%,
+    color-mix(in srgb, var(--color-cyan) 7%, transparent) 0%,
+    transparent 60%
+  );
+}
