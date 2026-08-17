@@ -121,11 +121,11 @@ function quarantineFailureMessage(electronDir, platformPath) {
   return (
     `dist/${platformPath} was missing or was deleted shortly after extraction on every ` +
     'attempt. This is almost certainly Windows Defender (or another antivirus/EDR) ' +
-    'quarantining the file, not a real extraction bug.\n\n' +
-    '[ensure-electron] To fix this yourself, run in an elevated (Run as Administrator) ' +
-    'PowerShell:\n' +
-    `[ensure-electron]   Add-MpPreference -ExclusionPath '${electronDir}'\n` +
-    '[ensure-electron] Then re-run: npm run ensure-electron'
+    'quarantining the file, not a real extraction bug — it is a well-known false-positive ' +
+    'pattern against generic Electron release binaries, not a real threat.\n\n' +
+    '[ensure-electron] To fix this permanently, add an exclusion:\n' +
+    manualExclusionInstructions(electronDir) +
+    '\n[ensure-electron] Then re-run: npm run ensure-electron'
   )
 }
 
@@ -137,32 +137,81 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-// Best-effort only. Windows Defender's cloud-delivered protection does an
-// async reputation check on freshly-written, unsigned executables and can
-// quarantine them a moment after they're written — the extraction itself
-// succeeds and the binary is briefly present, then it's gone. Excluding the
-// electron folder up front avoids that entirely, but Add-MpPreference needs
-// admin rights, so this quietly no-ops (logged) when it can't run — the
-// retry/settle loop in extractElectron() is what actually guarantees
-// correctness regardless of whether this succeeds.
-function tryAddWindowsDefenderExclusion(targetDir, verbose) {
-  if (process.platform !== 'win32') return
+function runPowershell(command, timeoutMs = 10000) {
+  const { execFileSync } = require('child_process')
+  return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+    timeout: timeoutMs,
+    windowsHide: true
+  })
+    .toString()
+    .trim()
+}
+
+// Reading the current exclusion list (Get-MpPreference) does NOT require
+// admin rights, even though ADDING one (Add/Set-MpPreference) does. That
+// asymmetry is useful: we can always tell the user the true current state
+// even when we can't fix it ourselves.
+function isDefenderExclusionActive(targetDir) {
+  if (process.platform !== 'win32') return null
   try {
-    const { execFileSync } = require('child_process')
     const escaped = targetDir.replace(/'/g, "''")
-    execFileSync(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-Command', `Add-MpPreference -ExclusionPath '${escaped}'`],
-      { stdio: verbose ? 'inherit' : 'ignore', timeout: 10000, windowsHide: true }
+    const out = runPowershell(
+      `$p = (Get-MpPreference).ExclusionPath; if ($p -contains '${escaped}') { 'YES' } else { 'NO' }`
     )
-    log(`requested a Windows Defender exclusion for ${targetDir}`)
-  } catch (err) {
-    log(
-      'could not automatically add a Windows Defender exclusion ' +
-        '(needs an elevated/admin terminal) — continuing without it'
-    )
-    if (verbose && err) log(String(err.message || err))
+    return out === 'YES'
+  } catch {
+    return null // Defender module unavailable, PowerShell blocked, or Defender not in use
   }
+}
+
+function manualExclusionInstructions(targetDir) {
+  return `[ensure-electron]   Option A — elevated PowerShell (Run as Administrator):
+[ensure-electron]     Add-MpPreference -ExclusionPath '${targetDir}'
+[ensure-electron]   Option B — Windows Security app:
+[ensure-electron]     Windows Security > Virus & threat protection > Manage settings
+[ensure-electron]     (under "Virus & threat protection settings") > Add or remove exclusions
+[ensure-electron]     > Add an exclusion > Folder > select:
+[ensure-electron]       ${targetDir}`
+}
+
+// Windows Defender's cloud-delivered protection (MAPS) does an async
+// reputation check on freshly-written, unsigned executables and can
+// quarantine them seconds after they're written and already passed the
+// initial on-write scan — this is a well-documented false-positive pattern
+// for generic Electron release binaries specifically, not a real threat.
+// A folder-scoped exclusion is the only fully reliable fix; adding one
+// requires admin rights, so this is best-effort and the result is always
+// reported plainly (never silently swallowed) so the caller can decide how
+// long to defensively wait out the async scan.
+function ensureWindowsDefenderExclusion(targetDir, verbose) {
+  if (process.platform !== 'win32') return { platform: false, active: null }
+
+  let active = isDefenderExclusionActive(targetDir)
+
+  if (active === false) {
+    try {
+      const escaped = targetDir.replace(/'/g, "''")
+      runPowershell(`Add-MpPreference -ExclusionPath '${escaped}'`)
+      active = isDefenderExclusionActive(targetDir)
+    } catch (err) {
+      if (verbose) log(`Add-MpPreference attempt failed: ${err.message || err}`)
+    }
+  }
+
+  console.log('')
+  if (active === true) {
+    log(`Windows Defender exclusion CONFIRMED ACTIVE for: ${targetDir}`)
+  } else if (active === false) {
+    log(`Windows Defender exclusion NOT active for: ${targetDir}`)
+    log('Defender may quarantine the Electron binary after this script reports success.')
+    log('For a permanent fix, add an exclusion yourself:')
+    console.log(manualExclusionInstructions(targetDir))
+  } else {
+    log('could not determine Windows Defender exclusion status (continuing anyway)')
+  }
+  console.log('')
+
+  return { platform: true, active }
 }
 
 async function main() {
@@ -254,11 +303,17 @@ async function main() {
   }
 
   const distDir = path.join(electronDir, 'dist')
-  tryAddWindowsDefenderExclusion(electronDir, verbose)
+  const defender = ensureWindowsDefenderExclusion(electronDir, verbose)
 
   const MAX_ATTEMPTS = 3
-  const SETTLE_CHECKS = 4
   const SETTLE_DELAY_MS = 1500
+  // With a confirmed exclusion, Defender won't touch this file at all, so a
+  // short settle window is just a sanity check. Without one, we're racing
+  // Defender's async cloud reputation lookup blind — it can take well over
+  // the original 6s window this used, so wait much longer before trusting
+  // the file. This is a mitigation, not a guarantee; the exclusion printed
+  // above is the only fix with no race condition in it.
+  const SETTLE_CHECKS = defender.active === true ? 3 : 14
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const isLastAttempt = attempt === MAX_ATTEMPTS
