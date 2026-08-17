@@ -7,32 +7,46 @@
  * downloads the ~200MB platform binary — and a plain `npm install` afterwards
  * reports "up to date" without ever re-running it, since npm only tracks
  * whether the electron *package* was extracted, not whether that side effect
- * actually completed. This script re-implements just that one download +
- * extraction step directly, using Electron's own official download and
- * checksum-verification library (@electron/get) and the same extraction
- * library electron itself uses.
+ * actually completed.
  *
- * On Windows, this can also collide with Windows Defender flagging the
- * generic, unsigned Electron binary as a false positive and quarantining it
- * shortly after it's written. THIS SCRIPT DOES NOT TRY TO FIX THAT. An
- * earlier version of this file called PowerShell (Add-MpPreference,
- * Get-MpPreference, Get-MpComputerStatus, Get-MpThreat) to inspect and
- * modify Defender's exclusion list automatically. That was a mistake:
- * Defender's behavioral engine flagged the resulting node.exe process itself
- * as suspicious (Behavior:Win32/NodeSussProcLaunch.D) — a Node.js process
- * spawning PowerShell to modify the antivirus's own configuration is exactly
- * the pattern real malware droppers use to disable protection before
- * dropping a payload, so a legitimate installer doing the same thing for
- * good reasons still looks identical to Defender's heuristics. This script
- * therefore spawns NO child processes and touches NO security settings, on
- * any platform. If Windows Defender quarantines the binary, that's reported
- * clearly as plain text in the failure message, with manual (GUI-only) steps
- * — never anything this script attempts on the user's behalf.
+ * WINDOWS: confirmed via Get-MpThreatDetection that Windows Defender's
+ * behavioral engine flags this pattern directly:
+ *
+ *   ProcessName: C:\Program Files\nodejs\node.exe
+ *   ThreatID:    2147959239 (Behavior:Win32/NodeSussProcLaunch.D)
+ *   Resources:   behavior:_process: C:\Program Files\nodejs\node.exe
+ *
+ * Note there is no file resource in that detection — this is not about the
+ * downloaded .exe's content, and removing all PowerShell/child_process calls
+ * from this script (an earlier version used them to inspect/add a Defender
+ * exclusion) did NOT fix it: even a script that only downloads via @electron/get
+ * and extracts via extract-zip — zero subprocess calls anywhere — still hangs
+ * during extraction on the affected machine. The behavior being flagged is
+ * "node.exe fetches an archive from the internet and unpacks an executable
+ * from it," full stop, independent of implementation. There is no way to
+ * reimplement that operation in Node that doesn't match the same pattern.
+ *
+ * So on Windows, this script does NOT attempt an automated download by
+ * default. Instead it tells you the exact official URL and target folder,
+ * you download and extract it yourself (browser + Windows Explorer — tools
+ * Defender already trusts for those specific actions), and this script's job
+ * shrinks to what's actually safe to automate: checking the file is present
+ * and a plausible size, and writing the two tiny marker files
+ * (node_modules/electron/path.txt and dist/version) that electron's own
+ * package needs to resolve the binary — plain fs.writeFileSync calls,
+ * nothing resembling the flagged pattern. That verification is also what
+ * makes every subsequent `npm run dev` instant with zero network activity —
+ * no repeated downloads.
+ *
+ * macOS and Linux are unaffected by this issue (verified extensively) and
+ * keep the original automated download+extract path. A Windows machine that
+ * does NOT have this problem can opt back into the automated path with
+ * ENSURE_ELECTRON_ALLOW_AUTO_DOWNLOAD=true.
  *
  * Every code path here prints something — there is no silent success or
  * failure — and it's wired via predev, prestart, prebuild:win/mac/linux, and
- * postinstall so a broken binary self-heals before Electron ever tries to
- * launch.
+ * postinstall so a correctly-installed binary is confirmed instantly before
+ * Electron ever tries to launch.
  */
 
 const fs = require('fs')
@@ -57,21 +71,9 @@ function fail(msg, err) {
     console.error(`[ensure-electron] ${err.stack || err.message || err}`)
   }
   console.error(`
-[ensure-electron] Other possible causes:
-  - A corporate proxy or firewall blocking github.com / githubusercontent.com.
-    If you're behind a proxy, set HTTPS_PROXY / HTTP_PROXY env vars, or set
-    an Electron mirror: set ELECTRON_MIRROR=<your-internal-mirror-url>
-  - OneDrive syncing this project folder and locking files mid-extraction.
-    Try moving the project outside any OneDrive-synced directory.
-
 Re-run with more detail:
   npm run ensure-electron -- --verbose
 `)
-  // Force-exit rather than setting exitCode: the whole point of the timeout
-  // and settle-window logic below is to escape a silently-hung or
-  // eventually-quarantined download. If we just set exitCode and let the
-  // event loop drain naturally, an orphaned promise or timer could keep the
-  // process alive far longer than intended.
   process.exit(1)
 }
 
@@ -81,17 +83,24 @@ function succeed(msg) {
   process.exit(0)
 }
 
-process.on('exit', (code) => {
-  if (!settled) {
-    console.error(
-      '\n[ensure-electron] The process is exiting (code ' +
-        code +
-        ') without reaching a normal completion path.\n' +
-        '[ensure-electron] This strongly suggests something OUTSIDE Node.js — antivirus, an\n' +
-        '[ensure-electron] EDR agent, or a corporate proxy — is terminating the download.'
-    )
-  }
-})
+// Registered lazily (inside the require.main guard at the bottom of this
+// file), not at module load time — otherwise this fires spuriously whenever
+// another script (verify-electron-zip.js) requires this file for its helper
+// functions and then exits on its own, unrelated completion path.
+function registerUnexpectedExitWarning() {
+  process.on('exit', (code) => {
+    if (!settled) {
+      console.error(
+        '\n[ensure-electron] The process is exiting (code ' +
+          code +
+          ') without reaching a normal completion path.\n' +
+          '[ensure-electron] If this happened during a download/extract attempt, that step is\n' +
+          '[ensure-electron] not supposed to run automatically on Windows by default — see\n' +
+          '[ensure-electron] ENSURE_ELECTRON_ALLOW_AUTO_DOWNLOAD in the script source.'
+      )
+    }
+  })
+}
 
 function getPlatformPath(platform) {
   switch (platform) {
@@ -125,69 +134,74 @@ function binaryLooksValid(electronDir, platformPath) {
 }
 
 function sleep(ms) {
-  // Deliberately NOT .unref()'d: this is used to actively wait out settle
-  // windows during extraction verification, and an unref'd timer lets Node
-  // exit before it fires once nothing else is pending — which is exactly
-  // the silent-early-exit bug this whole script exists to prevent.
+  // Deliberately NOT .unref()'d — see git history for why that matters here.
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function quarantineFailureMessage(electronDir, platformPath) {
-  return `dist/${platformPath} was missing or was deleted shortly after extraction. On \
-Windows this is almost always Windows Defender quarantining the file — a well-documented \
-false-positive pattern against generic, unsigned Electron release binaries, not a real \
-threat.
-
-[ensure-electron] This script does not keep retrying: every attempt extracts the identical \
-bytes from the same downloaded zip, so Defender would reach the identical verdict every \
-time — repeating it would only waste your time. It also does not run PowerShell or touch \
-any security settings on its own; that behavior previously triggered a SEPARATE Defender \
-detection (Behavior:Win32/NodeSussProcLaunch.D) against node.exe itself, because a Node \
-process spawning PowerShell to modify antivirus configuration looks identical to a common \
-malware technique, however legitimate the reason. So the fix has to be something you do \
-by hand, in the Windows Security app itself — not something automated here:
-
-[ensure-electron]   1. Windows Security > Virus & threat protection > Manage settings
-[ensure-electron]      (under "Virus & threat protection settings") > Add or remove
-[ensure-electron]      exclusions > Add an exclusion > Folder > select:
-[ensure-electron]        ${electronDir}
-[ensure-electron]   2. Then re-run: npm run ensure-electron
-[ensure-electron]
-[ensure-electron]   If you have no admin access on this machine at all: Windows Security >
-[ensure-electron]   Virus & threat protection > Protection history > find the detection >
-[ensure-electron]   Actions > Restore. This recovers just this one file without an
-[ensure-electron]   exclusion, but Defender will likely re-quarantine it on the next fresh
-[ensure-electron]   download.
-[ensure-electron]
-[ensure-electron]   For a permanent, upstream fix: submit the file as a false positive at
-[ensure-electron]   https://www.microsoft.com/en-us/wdsi/filesubmission`
+// Pure fs.writeFileSync — no network, no subprocess. electron's own
+// node_modules/electron/index.js throws "Electron failed to install
+// correctly" unless path.txt exists, even if dist/<binary> is genuinely
+// present (e.g. placed there manually), so this always needs to run once.
+function writeInstallMarkers(electronDir, distDir, platformPath, version) {
+  fs.writeFileSync(path.join(electronDir, 'path.txt'), platformPath)
+  fs.writeFileSync(path.join(distDir, 'version'), `v${version}`)
 }
 
-async function main() {
-  const verbose = process.argv.includes('--verbose')
-  const force = process.argv.includes('--force') || process.env.force_no_cache === 'true'
+function zipFileName(version, platform, arch) {
+  return `electron-v${version}-${platform}-${arch}.zip`
+}
 
-  const electronDir = path.dirname(require.resolve('electron/package.json'))
-  const { version } = require('electron/package.json')
-  const platform = process.env.npm_config_platform || os.platform()
-  const arch = process.env.npm_config_arch || os.arch()
-  const platformPath = getPlatformPath(platform)
+function officialDownloadUrl(version, platform, arch) {
+  return `https://github.com/electron/electron/releases/download/v${version}/${zipFileName(version, platform, arch)}`
+}
 
-  log(`electron ${version} — platform=${platform} arch=${arch}`)
-
-  if (!force && binaryLooksValid(electronDir, platformPath)) {
-    succeed(`binary already present at dist/${platformPath} — nothing to do`)
-    return
+function expectedZipChecksum(electronDir, version, platform, arch) {
+  try {
+    const checksums = require(path.join(electronDir, 'checksums.json'))
+    return checksums[zipFileName(version, platform, arch)] || null
+  } catch {
+    return null
   }
+}
 
-  log(`binary missing or invalid at dist/${platformPath}, downloading...`)
-  if (verbose) {
-    log(`cache root: ${process.env.electron_config_cache || '(default)'}`)
-    log(`HTTPS_PROXY=${process.env.HTTPS_PROXY || process.env.https_proxy || '(unset)'}`)
-    log(`HTTP_PROXY=${process.env.HTTP_PROXY || process.env.http_proxy || '(unset)'}`)
-    log(`ELECTRON_MIRROR=${process.env.ELECTRON_MIRROR || '(unset)'}`)
+function manualDownloadInstructions(electronDir, distDir, version, platform, arch) {
+  const url = officialDownloadUrl(version, platform, arch)
+  const checksum = expectedZipChecksum(electronDir, version, platform, arch)
+
+  return `[ensure-electron] Windows Defender's behavioral engine flags Node.js downloading
+[ensure-electron] and unpacking an executable — regardless of how that's implemented — so
+[ensure-electron] this script does not attempt it automatically here. This is a one-time
+[ensure-electron] manual step; every "npm run dev" after this is instant with no download.
+[ensure-electron]
+[ensure-electron] 1. Download this file in your browser (Edge/Chrome — not this script):
+[ensure-electron]      ${url}
+[ensure-electron]${checksum ? `\n[ensure-electron]    Expected SHA-256: ${checksum}\n[ensure-electron]    Verify it (optional) with:\n[ensure-electron]      npm run verify-electron-zip -- "C:\\path\\to\\${zipFileName(version, platform, arch)}"\n[ensure-electron]` : ''}
+[ensure-electron] 2. Extract the zip's contents DIRECTLY into (not into a subfolder of):
+[ensure-electron]      ${distDir}
+[ensure-electron]    In Windows Explorer's extract wizard, edit the destination field to
+[ensure-electron]    remove any extra folder it suggests, so that afterward this file
+[ensure-electron]    exists:
+[ensure-electron]      ${path.join(distDir, getPlatformPathSafe(platform))}
+[ensure-electron]
+[ensure-electron] 3. Re-run: npm run dev  (or: npm run ensure-electron)
+[ensure-electron]    This script will detect the file, write the two small marker files
+[ensure-electron]    electron needs (path.txt, dist/version — plain text, no network or
+[ensure-electron]    subprocess involved), and you're done.
+[ensure-electron]
+[ensure-electron] If a machine is confirmed NOT to have this Defender issue, automated
+[ensure-electron] download can be re-enabled for it:
+[ensure-electron]   set ENSURE_ELECTRON_ALLOW_AUTO_DOWNLOAD=true`
+}
+
+function getPlatformPathSafe(platform) {
+  try {
+    return getPlatformPath(platform)
+  } catch {
+    return 'electron.exe'
   }
+}
 
+async function runAutomatedDownload(electronDir, distDir, platformPath, version, platform, arch, verbose) {
   let downloadArtifact, extract
   try {
     ;({ downloadArtifact } = requireFromElectron('@electron/get'))
@@ -221,9 +235,6 @@ async function main() {
   })
 
   const timeoutPromise = new Promise((_, reject) => {
-    // Not .unref()'d, same reasoning as sleep() above — this timer is the
-    // thing that's supposed to fire if everything else silently stalls, so
-    // it must not be the thing that lets the process exit early instead.
     setTimeout(() => {
       reject(
         new Error(
@@ -251,11 +262,6 @@ async function main() {
     return
   }
 
-  const distDir = path.join(electronDir, 'dist')
-
-  // A single attempt, always: every attempt would extract byte-identical
-  // content from this same zip, so a real quarantine's verdict can't differ
-  // between retries — there's nothing to gain from looping.
   log('extracting...')
   try {
     await extract(zipPath, { dir: distDir })
@@ -264,34 +270,21 @@ async function main() {
     return
   }
 
-  try {
-    fs.writeFileSync(path.join(electronDir, 'path.txt'), platformPath)
-    fs.writeFileSync(path.join(distDir, 'version'), `v${version}`)
-  } catch (err) {
-    fail('extraction succeeded but writing path.txt/version markers failed', err)
-    return
-  }
+  writeInstallMarkers(electronDir, distDir, platformPath, version)
 
   if (!binaryLooksValid(electronDir, platformPath)) {
-    fail(quarantineFailureMessage(electronDir, platformPath))
+    fail(`dist/${platformPath} is missing immediately after extraction.`)
     return
   }
 
-  // The binary exists right now. On Windows, Defender's cloud-delivered
-  // protection can quarantine a freshly-written, unsigned .exe a moment
-  // *after* it's written and passes an initial scan — so watch it for a
-  // while before trusting it, instead of declaring success the instant it
-  // first appears. This only polls this process's own filesystem state
-  // (fs.statSync) — it spawns nothing.
   log('binary present — confirming it is still there a moment later...')
   for (let i = 0; i < SETTLE_CHECKS; i++) {
     await sleep(SETTLE_DELAY_MS)
     if (!binaryLooksValid(electronDir, platformPath)) {
-      log(
+      fail(
         `dist/${platformPath} disappeared ${(((i + 1) * SETTLE_DELAY_MS) / 1000).toFixed(1)}s ` +
           'after extraction.'
       )
-      fail(quarantineFailureMessage(electronDir, platformPath))
       return
     }
   }
@@ -301,6 +294,58 @@ async function main() {
   succeed(`installed successfully: ${finalPath} (${(finalStat.size / 1024 / 1024).toFixed(0)}MB)`)
 }
 
-main().catch((err) => {
-  fail('unexpected error', err)
-})
+async function main() {
+  const verbose = process.argv.includes('--verbose')
+  const force = process.argv.includes('--force') || process.env.force_no_cache === 'true'
+
+  const electronDir = path.dirname(require.resolve('electron/package.json'))
+  const { version } = require('electron/package.json')
+  const platform = process.env.npm_config_platform || os.platform()
+  const arch = process.env.npm_config_arch || os.arch()
+  const platformPath = getPlatformPath(platform)
+  const distDir = path.join(electronDir, 'dist')
+
+  log(`electron ${version} — platform=${platform} arch=${arch}`)
+
+  if (!force && binaryLooksValid(electronDir, platformPath)) {
+    // Binary present. Markers might still be missing if it was placed here
+    // manually and this is the first run since — writing them is safe,
+    // network-free, subprocess-free housekeeping either way.
+    writeInstallMarkers(electronDir, distDir, platformPath, version)
+    succeed(`binary already present at dist/${platformPath} — nothing to do`)
+    return
+  }
+
+  const allowAutoDownload =
+    platform !== 'win32' || process.env.ENSURE_ELECTRON_ALLOW_AUTO_DOWNLOAD === 'true'
+
+  if (!allowAutoDownload) {
+    fail(
+      `dist/${platformPath} is missing, and automated download is disabled by default on ` +
+        "Windows (see this script's header comment for why).\n\n" +
+        manualDownloadInstructions(electronDir, distDir, version, platform, arch)
+    )
+    return
+  }
+
+  log(`binary missing or invalid at dist/${platformPath}, downloading...`)
+  if (verbose) {
+    log(`cache root: ${process.env.electron_config_cache || '(default)'}`)
+    log(`HTTPS_PROXY=${process.env.HTTPS_PROXY || process.env.https_proxy || '(unset)'}`)
+    log(`HTTP_PROXY=${process.env.HTTP_PROXY || process.env.http_proxy || '(unset)'}`)
+    log(`ELECTRON_MIRROR=${process.env.ELECTRON_MIRROR || '(unset)'}`)
+  }
+
+  await runAutomatedDownload(electronDir, distDir, platformPath, version, platform, arch, verbose)
+}
+
+module.exports = { officialDownloadUrl, zipFileName, expectedZipChecksum }
+
+// Only auto-run when invoked directly (`node ensure-electron.js`), not when
+// required as a module by verify-electron-zip.js for its helper functions.
+if (require.main === module) {
+  registerUnexpectedExitWarning()
+  main().catch((err) => {
+    fail('unexpected error', err)
+  })
+}

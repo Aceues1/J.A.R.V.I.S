@@ -13,6 +13,7 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "test": "vitest run",
     "ensure-electron": "node scripts/ensure-electron.js",
+    "verify-electron-zip": "node scripts/verify-electron-zip.js",
     "predev": "node scripts/ensure-electron.js",
     "prestart": "node scripts/ensure-electron.js",
     "start": "electron-vite preview",
