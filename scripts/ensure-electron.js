@@ -117,6 +117,54 @@ function binaryLooksValid(electronDir, platformPath) {
   }
 }
 
+function quarantineFailureMessage(electronDir, platformPath) {
+  return (
+    `dist/${platformPath} was missing or was deleted shortly after extraction on every ` +
+    'attempt. This is almost certainly Windows Defender (or another antivirus/EDR) ' +
+    'quarantining the file, not a real extraction bug.\n\n' +
+    '[ensure-electron] To fix this yourself, run in an elevated (Run as Administrator) ' +
+    'PowerShell:\n' +
+    `[ensure-electron]   Add-MpPreference -ExclusionPath '${electronDir}'\n` +
+    '[ensure-electron] Then re-run: npm run ensure-electron'
+  )
+}
+
+function sleep(ms) {
+  // Deliberately NOT .unref()'d: this is used to actively wait out settle
+  // windows during extraction verification, and an unref'd timer lets Node
+  // exit before it fires once nothing else is pending — which is exactly
+  // the silent-early-exit bug this whole script exists to prevent.
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// Best-effort only. Windows Defender's cloud-delivered protection does an
+// async reputation check on freshly-written, unsigned executables and can
+// quarantine them a moment after they're written — the extraction itself
+// succeeds and the binary is briefly present, then it's gone. Excluding the
+// electron folder up front avoids that entirely, but Add-MpPreference needs
+// admin rights, so this quietly no-ops (logged) when it can't run — the
+// retry/settle loop in extractElectron() is what actually guarantees
+// correctness regardless of whether this succeeds.
+function tryAddWindowsDefenderExclusion(targetDir, verbose) {
+  if (process.platform !== 'win32') return
+  try {
+    const { execFileSync } = require('child_process')
+    const escaped = targetDir.replace(/'/g, "''")
+    execFileSync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', `Add-MpPreference -ExclusionPath '${escaped}'`],
+      { stdio: verbose ? 'inherit' : 'ignore', timeout: 10000, windowsHide: true }
+    )
+    log(`requested a Windows Defender exclusion for ${targetDir}`)
+  } catch (err) {
+    log(
+      'could not automatically add a Windows Defender exclusion ' +
+        '(needs an elevated/admin terminal) — continuing without it'
+    )
+    if (verbose && err) log(String(err.message || err))
+  }
+}
+
 async function main() {
   const verbose = process.argv.includes('--verbose')
   const force = process.argv.includes('--force') || process.env.force_no_cache === 'true'
@@ -175,6 +223,9 @@ async function main() {
   })
 
   const timeoutPromise = new Promise((_, reject) => {
+    // Not .unref()'d, same reasoning as sleep() above — this timer is the
+    // thing that's supposed to fire if everything else silently stalls, so
+    // it must not be the thing that lets the process exit early instead.
     setTimeout(() => {
       reject(
         new Error(
@@ -182,7 +233,7 @@ async function main() {
             'Nothing progressed — this is the signature of a silent block, not a slow network.'
         )
       )
-    }, TIMEOUT_MS).unref()
+    }, TIMEOUT_MS)
   })
 
   let zipPath
@@ -203,33 +254,81 @@ async function main() {
   }
 
   const distDir = path.join(electronDir, 'dist')
-  try {
-    log('extracting...')
-    await extract(zipPath, { dir: distDir })
-  } catch (err) {
-    fail('extraction failed', err)
-    return
-  }
+  tryAddWindowsDefenderExclusion(electronDir, verbose)
 
-  try {
-    fs.writeFileSync(path.join(electronDir, 'path.txt'), platformPath)
-    fs.writeFileSync(path.join(distDir, 'version'), `v${version}`)
-  } catch (err) {
-    fail('extraction succeeded but writing path.txt/version markers failed', err)
-    return
-  }
+  const MAX_ATTEMPTS = 3
+  const SETTLE_CHECKS = 4
+  const SETTLE_DELAY_MS = 1500
 
-  if (!binaryLooksValid(electronDir, platformPath)) {
-    fail(
-      `extraction completed but dist/${platformPath} is still missing or suspiciously small — ` +
-        'likely antivirus quarantined the executable immediately after it was written'
-    )
-    return
-  }
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const isLastAttempt = attempt === MAX_ATTEMPTS
+    log(`extracting (attempt ${attempt}/${MAX_ATTEMPTS})...`)
 
-  const finalPath = path.join(distDir, platformPath)
-  const finalStat = fs.statSync(finalPath)
-  succeed(`installed successfully: ${finalPath} (${(finalStat.size / 1024 / 1024).toFixed(0)}MB)`)
+    try {
+      await extract(zipPath, { dir: distDir })
+    } catch (err) {
+      if (isLastAttempt) {
+        fail('extraction failed', err)
+        return
+      }
+      log(`extraction attempt ${attempt} failed (${err.message}), retrying...`)
+      await sleep(1000 * attempt)
+      continue
+    }
+
+    try {
+      fs.writeFileSync(path.join(electronDir, 'path.txt'), platformPath)
+      fs.writeFileSync(path.join(distDir, 'version'), `v${version}`)
+    } catch (err) {
+      fail('extraction succeeded but writing path.txt/version markers failed', err)
+      return
+    }
+
+    if (!binaryLooksValid(electronDir, platformPath)) {
+      if (isLastAttempt) {
+        fail(quarantineFailureMessage(electronDir, platformPath))
+        return
+      }
+      log(`dist/${platformPath} missing right after extraction, retrying...`)
+      await sleep(1000 * attempt)
+      continue
+    }
+
+    // The binary exists right now. Windows Defender's cloud-delivered
+    // protection can quarantine a freshly-written, unsigned .exe a moment
+    // *after* it's written and passes an initial scan — so watch it for a
+    // few seconds before trusting it, instead of declaring success the
+    // instant it first appears.
+    log('binary present — confirming it survives antivirus scanning before finishing...')
+    let stable = true
+    for (let i = 0; i < SETTLE_CHECKS; i++) {
+      await sleep(SETTLE_DELAY_MS)
+      if (!binaryLooksValid(electronDir, platformPath)) {
+        stable = false
+        log(
+          `dist/${platformPath} disappeared ${(((i + 1) * SETTLE_DELAY_MS) / 1000).toFixed(1)}s ` +
+            'after extraction — antivirus almost certainly quarantined it'
+        )
+        break
+      }
+    }
+
+    if (stable) {
+      const finalPath = path.join(distDir, platformPath)
+      const finalStat = fs.statSync(finalPath)
+      succeed(
+        `installed successfully: ${finalPath} (${(finalStat.size / 1024 / 1024).toFixed(0)}MB)`
+      )
+      return
+    }
+
+    if (isLastAttempt) {
+      fail(quarantineFailureMessage(electronDir, platformPath))
+      return
+    }
+    log('retrying extraction from the already-downloaded archive...')
+    await sleep(1000 * attempt)
+  }
 }
 
 main().catch((err) => {
