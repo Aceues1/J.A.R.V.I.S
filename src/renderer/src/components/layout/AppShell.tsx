@@ -3,6 +3,7 @@ import type { StatusLevel } from '@renderer/types/hud'
 import { useSimulatedTelemetry } from '@renderer/hooks/useSimulatedTelemetry'
 import { useJarvisChat, type ChatEvent } from '@renderer/hooks/useJarvisChat'
 import { useVoiceInput, type VoiceEvent } from '@renderer/hooks/useVoiceInput'
+import { useSpeechPlayback, type SpeechEvent } from '@renderer/hooks/useSpeechPlayback'
 import { useBackendStatus } from '@renderer/hooks/useBackendStatus'
 import { useDiagnosticsFeed } from '@renderer/hooks/useDiagnosticsFeed'
 import { conversations, eventItems, marketQuotes, navItems, noteItems } from '@renderer/data/mock'
@@ -61,6 +62,33 @@ export function AppShell(): React.JSX.Element {
 
   const voice = useVoiceInput(handleTranscript, handleVoiceEvent)
 
+  const handleSpeechEvent = useCallback(
+    (event: SpeechEvent) => {
+      pushLog(event.kind === 'failed' ? 'warn' : 'info', event.detail)
+    },
+    [pushLog]
+  )
+
+  const speech = useSpeechPlayback(handleSpeechEvent)
+  const { speak } = speech
+
+  // Speak each newly arrived assistant reply; the hook dedupes by message id,
+  // and a TTS failure leaves the rendered text untouched.
+  useEffect(() => {
+    const last = messages[messages.length - 1]
+    if (last && last.role === 'assistant') {
+      speak(last.id, last.content)
+    }
+  }, [messages, speak])
+
+  useEffect(() => {
+    if (speech.available === true) {
+      pushLog('ok', `Voice output ready — ${speech.provider}`)
+    } else if (speech.available === false) {
+      pushLog('info', 'Voice output not configured — replies will be text-only')
+    }
+  }, [speech.available, speech.provider, pushLog])
+
   useEffect(() => {
     if (backend.configured === true) {
       pushLog('ok', `AI link ready — ${backend.model}`)
@@ -117,6 +145,10 @@ export function AppShell(): React.JSX.Element {
         voiceState={voice.state}
         voiceError={voice.error}
         onToggleVoice={voice.toggle}
+        speechAvailable={speech.available === true}
+        speechEnabled={speech.enabled}
+        speaking={speech.speaking}
+        onSpeakerClick={speech.speaking ? speech.stop : speech.toggleEnabled}
       />
     </div>
   )

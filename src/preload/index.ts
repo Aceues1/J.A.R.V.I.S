@@ -48,9 +48,20 @@ const chat = {
 
 export type VoiceTranscribeResult = { ok: true; text: string } | { ok: false; error: string }
 
+export type VoiceSpeakResult =
+  { ok: true; audio: Uint8Array; mimeType: string } | { ok: false; error: string }
+
+export interface TtsStatus {
+  configured: boolean
+  provider: string
+  voice: string
+}
+
 const voice = {
   transcribe: (audio: ArrayBuffer, mimeType: string): Promise<VoiceTranscribeResult> =>
-    ipcRenderer.invoke('voice:transcribe', { audio, mimeType })
+    ipcRenderer.invoke('voice:transcribe', { audio, mimeType }),
+  getTtsStatus: (): Promise<TtsStatus> => ipcRenderer.invoke('voice:tts-status'),
+  speak: (text: string): Promise<VoiceSpeakResult> => ipcRenderer.invoke('voice:speak', { text })
 }
 
 const jarvisApi = {

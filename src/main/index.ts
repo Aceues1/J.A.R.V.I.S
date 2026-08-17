@@ -6,6 +6,13 @@ import icon from '../../resources/icon.png?asset'
 import { GroqConfigError, GroqRequestError, getGroqStatus, requestGroqReply } from './groq'
 import { validateChatHistory } from './chat-validation'
 import { transcribeAudio, validateAudioPayload } from './transcription'
+import {
+  TtsConfigError,
+  TtsRequestError,
+  getTtsStatus,
+  synthesizeSpeech,
+  validateSpeakPayload
+} from './tts'
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -128,6 +135,26 @@ app.whenReady().then(() => {
       }
       console.error('[voice:transcribe] unexpected error', error)
       return { ok: false as const, error: 'Unexpected error transcribing audio.' }
+    }
+  })
+
+  ipcMain.handle('voice:tts-status', () => getTtsStatus())
+
+  ipcMain.handle('voice:speak', async (_event, payload: unknown) => {
+    const text = validateSpeakPayload(payload)
+    if (!text) {
+      return { ok: false as const, error: 'Malformed speech request.' }
+    }
+
+    try {
+      const { audio, mimeType } = await synthesizeSpeech(text)
+      return { ok: true as const, audio, mimeType }
+    } catch (error) {
+      if (error instanceof TtsConfigError || error instanceof TtsRequestError) {
+        return { ok: false as const, error: error.message }
+      }
+      console.error('[voice:speak] unexpected error', error)
+      return { ok: false as const, error: 'Unexpected error synthesizing speech.' }
     }
   })
 

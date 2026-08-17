@@ -14,6 +14,10 @@ interface CommandBarProps {
   voiceState: VoiceState
   voiceError: string | null
   onToggleVoice: () => void
+  speechAvailable: boolean
+  speechEnabled: boolean
+  speaking: boolean
+  onSpeakerClick: () => void
 }
 
 const micLabelByState: Record<VoiceState, string> = {
@@ -30,8 +34,19 @@ export const CommandBar = memo(function CommandBar({
   isLoading,
   voiceState,
   voiceError,
-  onToggleVoice
+  onToggleVoice,
+  speechAvailable,
+  speechEnabled,
+  speaking,
+  onSpeakerClick
 }: CommandBarProps): React.JSX.Element {
+  const speakerLabel = !speechAvailable
+    ? 'Voice output not configured'
+    : speaking
+      ? 'Stop speaking'
+      : speechEnabled
+        ? 'Voice output on — click to mute'
+        : 'Voice output muted — click to unmute'
   const inputRef = useRef<HTMLInputElement>(null)
   const canSubmit = value.trim().length > 0 && !isLoading
   const isRecording = voiceState === 'recording'
@@ -85,6 +100,36 @@ export const CommandBar = memo(function CommandBar({
         <span className="hidden shrink-0 font-mono text-[10px] tracking-[0.15em] text-ink-dim sm:inline">
           {status.toUpperCase()}
         </span>
+
+        <button
+          type="button"
+          aria-pressed={speechEnabled}
+          aria-label={speakerLabel}
+          title={speakerLabel}
+          disabled={!speechAvailable}
+          onClick={onSpeakerClick}
+          className={cn(
+            'flex h-9 w-9 shrink-0 items-center justify-center border transition-colors',
+            speaking
+              ? 'border-cyan bg-cyan/15 text-cyan animate-[var(--animate-blink)]'
+              : speechEnabled
+                ? 'border-cyan-dim/60 text-ink-dim hover:border-cyan/60 hover:text-cyan'
+                : 'border-cyan-dim/40 text-ink-dim/50 hover:border-cyan/40 hover:text-ink-dim',
+            !speechAvailable && 'cursor-not-allowed opacity-40'
+          )}
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M2.5 6v4h2.5L8.5 13V3L5 6H2.5Z" stroke="currentColor" strokeLinejoin="round" />
+            {speechEnabled ? (
+              <>
+                <path d="M10.5 6a3 3 0 0 1 0 4" stroke="currentColor" strokeLinecap="round" />
+                <path d="M12 4.5a5 5 0 0 1 0 7" stroke="currentColor" strokeLinecap="round" />
+              </>
+            ) : (
+              <path d="M10.5 6.5l3 3M13.5 6.5l-3 3" stroke="currentColor" strokeLinecap="round" />
+            )}
+          </svg>
+        </button>
 
         <button
           type="button"
