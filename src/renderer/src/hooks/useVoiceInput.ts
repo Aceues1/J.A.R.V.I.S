@@ -87,7 +87,9 @@ export function useVoiceInput(
         const result = await window.jarvis.voice.transcribe(buffer, mimeType)
         if (result.ok) {
           setState('idle')
-          onEventRef.current?.({ kind: 'transcript', detail: 'Voice input transcribed' })
+          // Quote what was heard so the diagnostics log confirms the actual text.
+          const preview = result.text.length > 48 ? `${result.text.slice(0, 48)}…` : result.text
+          onEventRef.current?.({ kind: 'transcript', detail: `Transcribed: "${preview}"` })
           onTranscriptRef.current(result.text)
         } else {
           fail(result.error)

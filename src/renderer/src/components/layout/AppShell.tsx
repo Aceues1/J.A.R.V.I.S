@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { StatusLevel } from '@renderer/types/hud'
 import { useSimulatedTelemetry } from '@renderer/hooks/useSimulatedTelemetry'
 import { useJarvisChat, type ChatEvent } from '@renderer/hooks/useJarvisChat'
@@ -41,19 +41,12 @@ export function AppShell(): React.JSX.Element {
 
   const { messages, isLoading, error, sendMessage, retry } = useJarvisChat(handleChatEvent)
 
-  // If a transcript lands while a chat request is still in flight, sendMessage
-  // would silently drop it — park it in the input instead so nothing is lost.
-  const isLoadingRef = useRef(isLoading)
-  useEffect(() => {
-    isLoadingRef.current = isLoading
-  }, [isLoading])
-
+  // A transcript that can't be sent right now (request already in flight) is
+  // parked in the input, visible, instead of being dropped.
   const handleTranscript = useCallback(
     (text: string) => {
-      if (isLoadingRef.current) {
+      if (!sendMessage(text)) {
         setInputValue(text)
-      } else {
-        sendMessage(text)
       }
     },
     [sendMessage]
@@ -87,8 +80,9 @@ export function AppShell(): React.JSX.Element {
           : 'standby'
 
   const handleSubmit = useCallback(() => {
-    sendMessage(inputValue)
-    setInputValue('')
+    if (sendMessage(inputValue)) {
+      setInputValue('')
+    }
   }, [inputValue, sendMessage])
 
   return (

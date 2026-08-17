@@ -19,7 +19,8 @@ interface UseJarvisChatResult {
   messages: ChatMessage[]
   isLoading: boolean
   error: string | null
-  sendMessage: (text: string) => void
+  /** Returns false when nothing was sent (blank text, or a request in flight). */
+  sendMessage: (text: string) => boolean
   retry: () => void
 }
 
@@ -27,14 +28,18 @@ export function useJarvisChat(onEvent?: (event: ChatEvent) => void): UseJarvisCh
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // Ref so retry/dispatch always see the latest transcript without re-creating callbacks.
+  // Refs so callers outside the render cycle (voice transcripts arriving via
+  // IPC) always hit live state — the isLoading state value alone would make
+  // sendMessage a stale closure that silently drops input.
   const messagesRef = useRef<ChatMessage[]>(messages)
+  const loadingRef = useRef(false)
   const onEventRef = useRef(onEvent)
   useEffect(() => {
     onEventRef.current = onEvent
   }, [onEvent])
 
   const dispatch = useCallback(async (history: ChatMessage[]) => {
+    loadingRef.current = true
     setError(null)
     setIsLoading(true)
     const startedAt = performance.now()
@@ -61,31 +66,33 @@ export function useJarvisChat(onEvent?: (event: ChatEvent) => void): UseJarvisCh
       setError(message)
       onEventRef.current?.({ kind: 'failed', detail: message })
     } finally {
+      loadingRef.current = false
       setIsLoading(false)
     }
   }, [])
 
   const sendMessage = useCallback(
-    (text: string) => {
+    (text: string): boolean => {
       const trimmed = text.trim()
-      if (!trimmed || isLoading) return
+      if (!trimmed || loadingRef.current) return false
 
       const userMessage = createMessage('user', trimmed)
       messagesRef.current = [...messagesRef.current, userMessage]
       setMessages(messagesRef.current)
       onEventRef.current?.({ kind: 'sent', detail: 'Request dispatched to AI backend' })
       void dispatch(messagesRef.current)
+      return true
     },
-    [dispatch, isLoading]
+    [dispatch]
   )
 
   const retry = useCallback(() => {
-    if (isLoading) return
+    if (loadingRef.current) return
     const history = messagesRef.current
     if (history.length === 0 || history[history.length - 1].role !== 'user') return
     onEventRef.current?.({ kind: 'sent', detail: 'Retrying last request' })
     void dispatch(history)
-  }, [dispatch, isLoading])
+  }, [dispatch])
 
   return { messages, isLoading, error, sendMessage, retry }
 }

@@ -35,7 +35,9 @@ export const CommandBar = memo(function CommandBar({
   const inputRef = useRef<HTMLInputElement>(null)
   const canSubmit = value.trim().length > 0 && !isLoading
   const isRecording = voiceState === 'recording'
-  const micBusy = isLoading || voiceState === 'transcribing'
+  // Stopping an active recording is always allowed; only starting a new one
+  // is blocked while a request is in flight or a transcription is running.
+  const micBusy = voiceState === 'transcribing' || (isLoading && !isRecording)
 
   // The input is disabled while a request is in flight, which drops focus —
   // reclaim it when the response lands so the user can keep typing.
