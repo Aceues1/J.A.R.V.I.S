@@ -1,10 +1,11 @@
 import 'dotenv/config'
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, session, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { GroqConfigError, GroqRequestError, getGroqStatus, requestGroqReply } from './groq'
 import { validateChatHistory } from './chat-validation'
+import { transcribeAudio, validateAudioPayload } from './transcription'
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -46,6 +47,25 @@ function createWindow(): void {
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.aceues1.jarvis')
+
+  // The renderer only ever needs the microphone; deny every other permission.
+  session.defaultSession.setPermissionRequestHandler(
+    (_webContents, permission, callback, details) => {
+      if (permission === 'media') {
+        const mediaTypes = (details as Electron.MediaAccessPermissionRequest).mediaTypes ?? []
+        callback(mediaTypes.length > 0 && mediaTypes.every((type) => type === 'audio'))
+        return
+      }
+      callback(false)
+    }
+  )
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission, _origin, details) => {
+    if (permission === 'media') {
+      const mediaType = (details as { mediaType?: string }).mediaType
+      return mediaType === undefined || mediaType === 'audio'
+    }
+    return false
+  })
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
@@ -90,6 +110,24 @@ app.whenReady().then(() => {
       }
       console.error('[chat:send] unexpected error', error)
       return { ok: false as const, error: 'Unexpected error contacting the AI backend.' }
+    }
+  })
+
+  ipcMain.handle('voice:transcribe', async (_event, payload: unknown) => {
+    const audio = validateAudioPayload(payload)
+    if (!audio) {
+      return { ok: false as const, error: 'Malformed audio payload.' }
+    }
+
+    try {
+      const text = await transcribeAudio(audio)
+      return { ok: true as const, text }
+    } catch (error) {
+      if (error instanceof GroqConfigError || error instanceof GroqRequestError) {
+        return { ok: false as const, error: error.message }
+      }
+      console.error('[voice:transcribe] unexpected error', error)
+      return { ok: false as const, error: 'Unexpected error transcribing audio.' }
     }
   })
 

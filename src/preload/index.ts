@@ -46,10 +46,18 @@ const chat = {
     ipcRenderer.invoke('chat:send', { messages: history })
 }
 
+export type VoiceTranscribeResult = { ok: true; text: string } | { ok: false; error: string }
+
+const voice = {
+  transcribe: (audio: ArrayBuffer, mimeType: string): Promise<VoiceTranscribeResult> =>
+    ipcRenderer.invoke('voice:transcribe', { audio, mimeType })
+}
+
 const jarvisApi = {
   window: windowControls,
   system,
-  chat
+  chat,
+  voice
 }
 
 export type JarvisApi = typeof jarvisApi

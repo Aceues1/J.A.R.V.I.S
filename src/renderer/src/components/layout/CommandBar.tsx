@@ -1,5 +1,6 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef } from 'react'
 import type { StatusLevel } from '@renderer/types/hud'
+import type { VoiceState } from '@renderer/hooks/useVoiceInput'
 import { cn } from '@renderer/lib/cn'
 
 const MAX_INPUT_LENGTH = 4000
@@ -10,6 +11,15 @@ interface CommandBarProps {
   onChange: (value: string) => void
   onSubmit: () => void
   isLoading: boolean
+  voiceState: VoiceState
+  voiceError: string | null
+  onToggleVoice: () => void
+}
+
+const micLabelByState: Record<VoiceState, string> = {
+  idle: 'Start voice input',
+  recording: 'Stop recording and send',
+  transcribing: 'Transcribing…'
 }
 
 export const CommandBar = memo(function CommandBar({
@@ -17,11 +27,15 @@ export const CommandBar = memo(function CommandBar({
   value,
   onChange,
   onSubmit,
-  isLoading
+  isLoading,
+  voiceState,
+  voiceError,
+  onToggleVoice
 }: CommandBarProps): React.JSX.Element {
-  const [micActive, setMicActive] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const canSubmit = value.trim().length > 0 && !isLoading
+  const isRecording = voiceState === 'recording'
+  const micBusy = isLoading || voiceState === 'transcribing'
 
   // The input is disabled while a request is in flight, which drops focus —
   // reclaim it when the response lands so the user can keep typing.
@@ -53,7 +67,15 @@ export const CommandBar = memo(function CommandBar({
           disabled={isLoading}
           maxLength={MAX_INPUT_LENGTH}
           autoFocus
-          placeholder={isLoading ? 'JARVIS is processing…' : 'Ask Jarvis...'}
+          placeholder={
+            isLoading
+              ? 'JARVIS is processing…'
+              : isRecording
+                ? 'Listening — click the mic again to send'
+                : voiceState === 'transcribing'
+                  ? 'Transcribing voice input…'
+                  : 'Ask Jarvis...'
+          }
           aria-label="Ask Jarvis"
           className="flex-1 bg-transparent font-sans text-base tracking-wide text-ink placeholder:text-ink-dim/70 focus:outline-none disabled:opacity-60"
         />
@@ -64,15 +86,19 @@ export const CommandBar = memo(function CommandBar({
 
         <button
           type="button"
-          aria-pressed={micActive}
-          aria-label="Toggle microphone (voice integration coming in a later phase)"
-          title="Voice input arrives in a later phase"
-          onClick={() => setMicActive((v) => !v)}
+          aria-pressed={isRecording}
+          aria-label={micLabelByState[voiceState]}
+          title={micLabelByState[voiceState]}
+          disabled={micBusy}
+          onClick={onToggleVoice}
           className={cn(
             'flex h-9 w-9 shrink-0 items-center justify-center border transition-colors',
-            micActive
-              ? 'border-cyan-bright bg-cyan/15 text-cyan-bright'
-              : 'border-cyan-dim/60 text-ink-dim hover:border-cyan/60 hover:text-cyan'
+            isRecording
+              ? 'border-alert bg-alert/15 text-alert animate-[var(--animate-blink)]'
+              : voiceState === 'transcribing'
+                ? 'border-warn/60 text-warn'
+                : 'border-cyan-dim/60 text-ink-dim hover:border-cyan/60 hover:text-cyan',
+            micBusy && 'cursor-not-allowed opacity-60'
           )}
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -98,8 +124,17 @@ export const CommandBar = memo(function CommandBar({
           </svg>
         </button>
       </form>
-      <p className="mt-1.5 px-1 font-mono text-[9px] tracking-[0.15em] text-ink-dim/70">
-        VOICE INPUT/OUTPUT, TOOLS AND COMPUTER CONTROL ARRIVE IN A LATER PHASE
+      <p
+        className={cn(
+          'mt-1.5 px-1 font-mono text-[9px] tracking-[0.15em]',
+          voiceError ? 'text-warn' : 'text-ink-dim/70'
+        )}
+      >
+        {voiceError
+          ? voiceError.toUpperCase()
+          : isRecording
+            ? 'LISTENING — CLICK THE MIC AGAIN TO SEND'
+            : 'CLICK THE MIC TO SPEAK · VOICE OUTPUT, TOOLS AND COMPUTER CONTROL ARRIVE IN A LATER PHASE'}
       </p>
     </div>
   )
