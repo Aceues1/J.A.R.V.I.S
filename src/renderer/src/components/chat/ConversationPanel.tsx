@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { memo, useEffect, useRef } from 'react'
 import type { ChatMessage } from '@renderer/types/hud'
 import { HudPanel } from '@renderer/components/hud/HudPanel'
 import { cn } from '@renderer/lib/cn'
@@ -7,49 +7,50 @@ interface ConversationPanelProps {
   messages: ChatMessage[]
   isLoading: boolean
   error: string | null
+  onRetry: () => void
+  className?: string
 }
 
-export function ConversationPanel({
+export const ConversationPanel = memo(function ConversationPanel({
   messages,
   isLoading,
-  error
+  error,
+  onRetry,
+  className
 }: ConversationPanelProps): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
-  }, [messages, isLoading])
+  }, [messages, isLoading, error])
 
   const isEmpty = messages.length === 0 && !isLoading && !error
 
   return (
-    <HudPanel eyebrow="Transcript" title="Conversation" bodyClassName="py-3">
+    <HudPanel
+      eyebrow="Transcript"
+      title="Conversation"
+      className={cn('flex min-h-0 flex-col', className)}
+      bodyClassName="flex min-h-0 flex-1 flex-col py-3"
+    >
       {isEmpty ? (
-        <p className="font-mono text-[11px] tracking-[0.15em] text-ink-dim">
-          NO ACTIVE EXCHANGE — ASK JARVIS SOMETHING BELOW
-        </p>
+        <div className="flex flex-1 items-center justify-center">
+          <p className="font-mono text-[11px] tracking-[0.2em] text-ink-dim">
+            NO ACTIVE EXCHANGE — ASK JARVIS SOMETHING BELOW
+          </p>
+        </div>
       ) : (
-        <div ref={scrollRef} className="max-h-36 space-y-2.5 overflow-y-auto pr-1">
+        <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-2">
           {messages.map((message) => (
-            <div key={message.id} className="font-mono text-[12px] leading-relaxed">
-              <span
-                className={cn(
-                  'mr-2 tracking-[0.15em]',
-                  message.role === 'user' ? 'text-ink-dim' : 'text-cyan'
-                )}
-              >
-                {message.role === 'user' ? 'YOU //' : 'JARVIS //'}
-              </span>
-              <span className={message.role === 'user' ? 'text-ink-dim' : 'text-ink'}>
-                {message.content}
-              </span>
-            </div>
+            <MessageBlock key={message.id} message={message} />
           ))}
 
           {isLoading && (
-            <div className="flex items-center gap-2 font-mono text-[12px]">
-              <span className="tracking-[0.15em] text-cyan">JARVIS //</span>
-              <span className="flex gap-1">
+            <div className="animate-[var(--animate-rise)]">
+              <p className="mb-1 font-mono text-[10px] tracking-[0.2em] text-cyan">
+                JARVIS <span className="text-ink-dim/70">{'// PROCESSING'}</span>
+              </p>
+              <span className="flex gap-1.5 py-1" aria-label="JARVIS is thinking">
                 <span className="h-1 w-1 animate-[var(--animate-blink)] rounded-full bg-cyan" />
                 <span
                   className="h-1 w-1 animate-[var(--animate-blink)] rounded-full bg-cyan"
@@ -60,17 +61,46 @@ export function ConversationPanel({
                   style={{ animationDelay: '0.4s' }}
                 />
               </span>
-              <span className="text-ink-dim">thinking…</span>
+            </div>
+          )}
+
+          {error && (
+            <div className="animate-[var(--animate-rise)] border-l-2 border-alert/60 pl-3">
+              <p className="mb-1 font-mono text-[10px] tracking-[0.2em] text-alert">
+                SYSTEM <span className="text-ink-dim/70">{'// ERROR'}</span>
+              </p>
+              <p className="font-mono text-[12px] leading-relaxed text-alert/90">{error}</p>
+              <button
+                type="button"
+                onClick={onRetry}
+                className="mt-1.5 border border-alert/50 px-2.5 py-1 font-mono text-[10px] tracking-[0.2em] text-alert transition-colors hover:bg-alert/10"
+              >
+                RETRY
+              </button>
             </div>
           )}
         </div>
       )}
-
-      {error && (
-        <p className="mt-2 border-t border-alert/30 pt-2 font-mono text-[11px] text-alert">
-          {error}
-        </p>
-      )}
     </HudPanel>
+  )
+})
+
+function MessageBlock({ message }: { message: ChatMessage }): React.JSX.Element {
+  const isUser = message.role === 'user'
+  return (
+    <div className="animate-[var(--animate-rise)]">
+      <p className="mb-1 font-mono text-[10px] tracking-[0.2em]">
+        <span className={isUser ? 'text-ink-dim' : 'text-cyan'}>{isUser ? 'YOU' : 'JARVIS'}</span>
+        <span className="ml-2 text-ink-dim/50">{message.time}</span>
+      </p>
+      <p
+        className={cn(
+          'font-sans text-sm leading-relaxed whitespace-pre-wrap',
+          isUser ? 'text-ink-dim' : 'text-ink'
+        )}
+      >
+        {message.content}
+      </p>
+    </div>
   )
 }

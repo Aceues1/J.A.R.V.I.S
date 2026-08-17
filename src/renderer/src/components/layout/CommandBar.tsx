@@ -1,6 +1,8 @@
-import { useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import type { StatusLevel } from '@renderer/types/hud'
 import { cn } from '@renderer/lib/cn'
+
+const MAX_INPUT_LENGTH = 4000
 
 interface CommandBarProps {
   status: StatusLevel
@@ -10,7 +12,7 @@ interface CommandBarProps {
   isLoading: boolean
 }
 
-export function CommandBar({
+export const CommandBar = memo(function CommandBar({
   status,
   value,
   onChange,
@@ -18,7 +20,14 @@ export function CommandBar({
   isLoading
 }: CommandBarProps): React.JSX.Element {
   const [micActive, setMicActive] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
   const canSubmit = value.trim().length > 0 && !isLoading
+
+  // The input is disabled while a request is in flight, which drops focus —
+  // reclaim it when the response lands so the user can keep typing.
+  useEffect(() => {
+    if (!isLoading) inputRef.current?.focus()
+  }, [isLoading])
 
   return (
     <div className="shrink-0 border-t border-cyan-dim/40 bg-void-deep/80 px-6 py-4">
@@ -37,11 +46,15 @@ export function CommandBar({
         />
 
         <input
+          ref={inputRef}
           type="text"
           value={value}
           onChange={(event) => onChange(event.target.value)}
           disabled={isLoading}
-          placeholder="Ask Jarvis..."
+          maxLength={MAX_INPUT_LENGTH}
+          autoFocus
+          placeholder={isLoading ? 'JARVIS is processing…' : 'Ask Jarvis...'}
+          aria-label="Ask Jarvis"
           className="flex-1 bg-transparent font-sans text-base tracking-wide text-ink placeholder:text-ink-dim/70 focus:outline-none disabled:opacity-60"
         />
 
@@ -53,6 +66,7 @@ export function CommandBar({
           type="button"
           aria-pressed={micActive}
           aria-label="Toggle microphone (voice integration coming in a later phase)"
+          title="Voice input arrives in a later phase"
           onClick={() => setMicActive((v) => !v)}
           className={cn(
             'flex h-9 w-9 shrink-0 items-center justify-center border transition-colors',
@@ -89,4 +103,4 @@ export function CommandBar({
       </p>
     </div>
   )
-}
+})

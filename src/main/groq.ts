@@ -1,5 +1,10 @@
-const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions'
+import type { ChatTurn } from './chat-validation'
+
+// GROQ_BASE_URL is a main-process-only override used by tests to point at a
+// local mock server; production always talks to the real endpoint.
+const DEFAULT_BASE_URL = 'https://api.groq.com/openai/v1'
 const DEFAULT_MODEL = 'llama-3.3-70b-versatile'
+const REQUEST_TIMEOUT_MS = 45_000
 
 const SYSTEM_PROMPT =
   'You are JARVIS, a concise and helpful personal AI assistant running inside a desktop ' +
@@ -7,13 +12,15 @@ const SYSTEM_PROMPT =
   'voice input/output, tool use, computer control, or trading/market capabilities — if asked ' +
   'to do any of those, say they are planned for a later phase rather than attempting them.'
 
-export interface ChatTurn {
-  role: 'user' | 'assistant'
-  content: string
-}
-
 export class GroqConfigError extends Error {}
 export class GroqRequestError extends Error {}
+
+export function getGroqStatus(): { configured: boolean; model: string } {
+  return {
+    configured: Boolean(process.env.GROQ_API_KEY),
+    model: process.env.GROQ_MODEL || DEFAULT_MODEL
+  }
+}
 
 function getApiKey(): string {
   const apiKey = process.env.GROQ_API_KEY
@@ -27,11 +34,12 @@ function getApiKey(): string {
 
 export async function requestGroqReply(history: ChatTurn[]): Promise<string> {
   const apiKey = getApiKey()
+  const baseUrl = process.env.GROQ_BASE_URL || DEFAULT_BASE_URL
   const model = process.env.GROQ_MODEL || DEFAULT_MODEL
 
   let response: Response
   try {
-    response = await fetch(GROQ_ENDPOINT, {
+    response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -42,9 +50,14 @@ export async function requestGroqReply(history: ChatTurn[]): Promise<string> {
         messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...history],
         temperature: 0.6,
         max_tokens: 1024
-      })
+      }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
     })
   } catch (error) {
+    if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+      console.error('[groq] request timed out')
+      throw new GroqRequestError('AI backend timed out. Try again.')
+    }
     console.error('[groq] network error', error)
     throw new GroqRequestError('Could not reach the AI backend. Check your network connection.')
   }
@@ -62,8 +75,16 @@ export async function requestGroqReply(history: ChatTurn[]): Promise<string> {
     throw new GroqRequestError(`AI backend returned an error (status ${response.status}).`)
   }
 
-  const data = await response.json()
-  const content = data?.choices?.[0]?.message?.content
+  let data: unknown
+  try {
+    data = await response.json()
+  } catch (error) {
+    console.error('[groq] invalid JSON in response', error)
+    throw new GroqRequestError('AI backend returned an unreadable response.')
+  }
+
+  const content = (data as { choices?: Array<{ message?: { content?: unknown } }> })?.choices?.[0]
+    ?.message?.content
 
   if (typeof content !== 'string' || content.trim().length === 0) {
     console.error('[groq] unexpected response shape', data)

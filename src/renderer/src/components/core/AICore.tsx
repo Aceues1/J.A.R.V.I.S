@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import type { StatusLevel } from '@renderer/types/hud'
 
 const TICK_COUNT = 48
@@ -8,14 +9,14 @@ function polar(cx: number, cy: number, r: number, angleDeg: number): [number, nu
   return [cx + r * Math.cos(rad), cy + r * Math.sin(rad)]
 }
 
-export function AICore({ status }: { status: StatusLevel }): React.JSX.Element {
+export const AICore = memo(function AICore({ status }: { status: StatusLevel }): React.JSX.Element {
   const isActive = status !== 'standby'
 
   return (
     <div className="relative flex h-full w-full items-center justify-center">
-      <div className="pointer-events-none absolute h-[420px] w-[420px] rounded-full bg-cyan/5 blur-3xl" />
+      <div className="pointer-events-none absolute -inset-[15%] rounded-full bg-cyan/5 blur-3xl" />
 
-      <svg viewBox="0 0 400 400" className="relative h-[360px] w-[360px] max-w-full">
+      <svg viewBox="0 0 400 400" className="relative h-full w-full">
         <defs>
           <radialGradient id="core-gradient" cx="50%" cy="50%" r="50%">
             <stop offset="0%" stopColor="#bffcff" stopOpacity="0.95" />
@@ -122,7 +123,7 @@ export function AICore({ status }: { status: StatusLevel }): React.JSX.Element {
       </svg>
     </div>
   )
-}
+})
 
 function describeArc(
   cx: number,

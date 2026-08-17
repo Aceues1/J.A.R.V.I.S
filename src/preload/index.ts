@@ -35,7 +35,13 @@ export interface ChatTurn {
 
 export type ChatSendResult = { ok: true; message: string } | { ok: false; error: string }
 
+export interface ChatBackendStatus {
+  configured: boolean
+  model: string
+}
+
 const chat = {
+  getStatus: (): Promise<ChatBackendStatus> => ipcRenderer.invoke('chat:get-status'),
   sendMessage: (history: ChatTurn[]): Promise<ChatSendResult> =>
     ipcRenderer.invoke('chat:send', { messages: history })
 }

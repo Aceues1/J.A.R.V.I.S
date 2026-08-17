@@ -28,7 +28,7 @@ export function Sidebar({
       <NavList items={navItems} activeId={activeNavId} onSelect={onSelectNav} />
       <ConversationsList items={conversations} />
       <div className="border-t border-cyan-dim/40 px-4 py-3 font-mono text-[10px] tracking-[0.15em] text-ink-dim">
-        BUILD 0.1.0 · SHELL PHASE
+        JARVIS · BUILD 0.2.0
       </div>
     </aside>
   )

@@ -8,7 +8,9 @@ export function TelemetryGrid({ metrics }: { metrics: TelemetryMetric[] }): Reac
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         {metrics.map((metric) => (
           <div key={metric.id} className="border border-cyan-dim/30 px-3 py-2.5">
-            <p className="font-mono text-[9px] tracking-[0.2em] text-ink-dim">{metric.label}</p>
+            <p className="font-mono text-[9px] tracking-[0.15em] whitespace-nowrap text-ink-dim">
+              {metric.label}
+            </p>
             <p className="mt-1 font-display text-lg text-cyan text-glow">
               {metric.value.toFixed(0)}
               <span className="ml-1 text-xs text-ink-dim">{metric.unit}</span>

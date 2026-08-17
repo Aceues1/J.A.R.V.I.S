@@ -4,6 +4,7 @@ import { ScanLine } from '@renderer/components/hud/ScanLine'
 import { TelemetryGrid } from '@renderer/components/telemetry/TelemetryGrid'
 import { DiagnosticsLog } from '@renderer/components/telemetry/DiagnosticsLog'
 import { ConversationPanel } from '@renderer/components/chat/ConversationPanel'
+import { cn } from '@renderer/lib/cn'
 
 interface CommandCenterProps {
   status: StatusLevel
@@ -12,6 +13,7 @@ interface CommandCenterProps {
   messages: ChatMessage[]
   isLoading: boolean
   chatError: string | null
+  onRetry: () => void
 }
 
 const statusReadout: Record<StatusLevel, string> = {
@@ -28,24 +30,61 @@ export function CommandCenter({
   log,
   messages,
   isLoading,
-  chatError
+  chatError,
+  onRetry
 }: CommandCenterProps): React.JSX.Element {
+  // Once an exchange starts, the core yields center stage to the transcript.
+  const hasConversation = messages.length > 0 || isLoading || chatError !== null
+
   return (
     <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
       <ScanLine />
 
-      <div className="relative flex flex-1 flex-col items-center justify-center px-6">
-        <p className="mb-2 font-mono text-[11px] tracking-[0.35em] text-ink-dim uppercase">
+      <div
+        className={cn(
+          'relative flex flex-col items-center justify-center px-6',
+          hasConversation ? 'shrink-0 pt-3' : 'flex-1'
+        )}
+      >
+        <p
+          className={cn(
+            'font-mono text-[11px] tracking-[0.35em] text-ink-dim uppercase transition-opacity duration-500',
+            hasConversation && 'hidden'
+          )}
+        >
           {statusReadout[status]}
         </p>
-        <div className="h-[320px] w-[320px]">
+        <div
+          className={cn(
+            'transition-all duration-700 ease-out',
+            hasConversation ? 'h-[150px] w-[150px]' : 'h-[320px] w-[320px]'
+          )}
+        >
           <AICore status={status} />
         </div>
-        <p className="mt-2 font-display text-2xl tracking-[0.3em] text-ink text-glow">JARVIS</p>
+        <p
+          className={cn(
+            'font-display tracking-[0.3em] text-ink text-glow transition-all duration-700',
+            hasConversation ? 'text-sm' : 'mt-2 text-2xl'
+          )}
+        >
+          JARVIS
+        </p>
       </div>
 
-      <div className="relative shrink-0 px-6 pb-4">
-        <ConversationPanel messages={messages} isLoading={isLoading} error={chatError} />
+      <div
+        className={cn(
+          'relative flex flex-col px-6 pt-3 pb-4',
+          hasConversation ? 'min-h-0 flex-1' : 'shrink-0'
+        )}
+      >
+        <ConversationPanel
+          messages={messages}
+          isLoading={isLoading}
+          error={chatError}
+          onRetry={onRetry}
+          className={hasConversation ? 'flex-1' : ''}
+        />
       </div>
 
       <div className="relative grid shrink-0 grid-cols-1 gap-4 px-6 pb-6 lg:grid-cols-[1.4fr_1fr]">

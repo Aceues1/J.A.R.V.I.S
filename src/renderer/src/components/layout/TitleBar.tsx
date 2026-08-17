@@ -11,7 +11,10 @@ export function TitleBar(): React.JSX.Element {
   }, [])
 
   return (
-    <div className="app-drag flex h-9 shrink-0 items-center justify-between border-b border-cyan-dim/40 bg-void-deep px-3">
+    <div
+      onDoubleClick={() => window.jarvis.window.maximizeToggle()}
+      className="app-drag flex h-9 shrink-0 items-center justify-between border-b border-cyan-dim/40 bg-void-deep px-3"
+    >
       <div className="flex items-center gap-2">
         <span className="h-1.5 w-1.5 rounded-full bg-cyan animate-[var(--animate-blink)]" />
         <span className="font-display text-[11px] tracking-[0.3em] text-ink-dim">

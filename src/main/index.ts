@@ -3,7 +3,8 @@ import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import { GroqConfigError, GroqRequestError, requestGroqReply, type ChatTurn } from './groq'
+import { GroqConfigError, GroqRequestError, getGroqStatus, requestGroqReply } from './groq'
+import { validateChatHistory } from './chat-validation'
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -72,6 +73,8 @@ app.whenReady().then(() => {
     return BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false
   })
 
+  ipcMain.handle('chat:get-status', () => getGroqStatus())
+
   ipcMain.handle('chat:send', async (_event, payload: unknown) => {
     const history = validateChatHistory(payload)
     if (!history) {
@@ -102,33 +105,3 @@ app.on('window-all-closed', () => {
     app.quit()
   }
 })
-
-const MAX_HISTORY_LENGTH = 40
-const MAX_MESSAGE_LENGTH = 4000
-
-function validateChatHistory(payload: unknown): ChatTurn[] | null {
-  if (
-    typeof payload !== 'object' ||
-    payload === null ||
-    !Array.isArray((payload as { messages?: unknown }).messages)
-  ) {
-    return null
-  }
-
-  const messages = (payload as { messages: unknown[] }).messages
-  if (messages.length === 0 || messages.length > MAX_HISTORY_LENGTH) {
-    return null
-  }
-
-  const history: ChatTurn[] = []
-  for (const entry of messages) {
-    if (typeof entry !== 'object' || entry === null) return null
-    const { role, content } = entry as { role?: unknown; content?: unknown }
-    if (role !== 'user' && role !== 'assistant') return null
-    if (typeof content !== 'string' || content.trim().length === 0) return null
-    if (content.length > MAX_MESSAGE_LENGTH) return null
-    history.push({ role, content })
-  }
-
-  return history
-}

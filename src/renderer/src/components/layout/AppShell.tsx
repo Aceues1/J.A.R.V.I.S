@@ -1,34 +1,58 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { StatusLevel } from '@renderer/types/hud'
 import { useSimulatedTelemetry } from '@renderer/hooks/useSimulatedTelemetry'
-import { useJarvisChat } from '@renderer/hooks/useJarvisChat'
-import {
-  conversations,
-  diagnosticsLog,
-  eventItems,
-  marketQuotes,
-  navItems,
-  noteItems
-} from '@renderer/data/mock'
+import { useJarvisChat, type ChatEvent } from '@renderer/hooks/useJarvisChat'
+import { useBackendStatus } from '@renderer/hooks/useBackendStatus'
+import { useDiagnosticsFeed } from '@renderer/hooks/useDiagnosticsFeed'
+import { conversations, eventItems, marketQuotes, navItems, noteItems } from '@renderer/data/mock'
 import { TitleBar } from './TitleBar'
 import { Sidebar } from './Sidebar'
 import { CommandCenter } from './CommandCenter'
 import { RightPanel } from './RightPanel'
 import { CommandBar } from './CommandBar'
 
+const chatEventLevel: Record<ChatEvent['kind'], 'info' | 'ok' | 'warn'> = {
+  sent: 'info',
+  received: 'ok',
+  failed: 'warn'
+}
+
 export function AppShell(): React.JSX.Element {
   const [activeNavId, setActiveNavId] = useState(navItems[0].id)
   const [inputValue, setInputValue] = useState('')
   const metrics = useSimulatedTelemetry()
-  const { messages, isLoading, error, sendMessage } = useJarvisChat()
+  const backend = useBackendStatus()
+  const { entries: logEntries, push: pushLog } = useDiagnosticsFeed()
 
-  const status: StatusLevel = error ? 'alert' : isLoading ? 'processing' : 'online'
+  const handleChatEvent = useCallback(
+    (event: ChatEvent) => {
+      pushLog(chatEventLevel[event.kind], event.detail)
+    },
+    [pushLog]
+  )
 
-  const handleSubmit = (): void => {
-    const text = inputValue
+  const { messages, isLoading, error, sendMessage, retry } = useJarvisChat(handleChatEvent)
+
+  useEffect(() => {
+    if (backend.configured === true) {
+      pushLog('ok', `AI link ready — ${backend.model}`)
+    } else if (backend.configured === false) {
+      pushLog('warn', 'GROQ_API_KEY not set — AI link offline')
+    }
+  }, [backend.configured, backend.model, pushLog])
+
+  const status: StatusLevel = error
+    ? 'alert'
+    : isLoading
+      ? 'processing'
+      : backend.configured
+        ? 'online'
+        : 'standby'
+
+  const handleSubmit = useCallback(() => {
+    sendMessage(inputValue)
     setInputValue('')
-    void sendMessage(text)
-  }
+  }, [inputValue, sendMessage])
 
   return (
     <div className="circuit-grid radial-vignette flex h-screen flex-col bg-void">
@@ -45,10 +69,11 @@ export function AppShell(): React.JSX.Element {
         <CommandCenter
           status={status}
           metrics={metrics}
-          log={diagnosticsLog}
+          log={logEntries}
           messages={messages}
           isLoading={isLoading}
           chatError={error}
+          onRetry={retry}
         />
         <RightPanel events={eventItems} notes={noteItems} quotes={marketQuotes} />
       </div>

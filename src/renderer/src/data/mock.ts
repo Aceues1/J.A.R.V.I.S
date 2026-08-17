@@ -1,7 +1,6 @@
 import type {
   ConversationItem,
   EventItem,
-  LogEntry,
   MarketQuote,
   NavItem,
   NoteItem
@@ -33,14 +32,6 @@ export const conversations: ConversationItem[] = [
     timestamp: 'Tue',
     preview: 'Flagged upcoming high-impact releases.'
   }
-]
-
-export const diagnosticsLog: LogEntry[] = [
-  { id: 'l1', time: '09:41:02', level: 'ok', message: 'Core link established' },
-  { id: 'l2', time: '09:41:05', level: 'info', message: 'Interface shell initialized' },
-  { id: 'l3', time: '09:41:07', level: 'info', message: 'Awaiting backend attachment' },
-  { id: 'l4', time: '09:41:09', level: 'warn', message: 'Voice module offline — phase 2' },
-  { id: 'l5', time: '09:41:11', level: 'ok', message: 'Telemetry stream nominal' }
 ]
 
 export const marketQuotes: MarketQuote[] = [
