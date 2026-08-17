@@ -6,6 +6,7 @@ const statusConfig: Record<StatusLevel, { label: string; dot: string; text: stri
   standby: { label: 'STANDBY', dot: 'bg-cyan', text: 'text-cyan' },
   listening: { label: 'LISTENING', dot: 'bg-cyan-bright', text: 'text-cyan-bright' },
   processing: { label: 'PROCESSING', dot: 'bg-warn', text: 'text-warn' },
+  speaking: { label: 'SPEAKING', dot: 'bg-good', text: 'text-good' },
   alert: { label: 'ALERT', dot: 'bg-alert', text: 'text-alert' }
 }
 

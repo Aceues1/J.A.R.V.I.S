@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useReducer, useState } from 'react'
 import type { StatusLevel } from '@renderer/types/hud'
 import { useSimulatedTelemetry } from '@renderer/hooks/useSimulatedTelemetry'
 import { useJarvisChat, type ChatEvent } from '@renderer/hooks/useJarvisChat'
 import { useVoiceInput, type VoiceEvent } from '@renderer/hooks/useVoiceInput'
 import { useSpeechPlayback, type SpeechEvent } from '@renderer/hooks/useSpeechPlayback'
+import { HANDS_FREE_OFF, handsFreeReducer } from '@renderer/lib/handsFree'
 import { useBackendStatus } from '@renderer/hooks/useBackendStatus'
 import { useDiagnosticsFeed } from '@renderer/hooks/useDiagnosticsFeed'
 import { conversations, eventItems, marketQuotes, navItems, noteItems } from '@renderer/data/mock'
@@ -23,6 +24,7 @@ const voiceEventLevel: Record<VoiceEvent['kind'], 'info' | 'ok' | 'warn'> = {
   listening: 'info',
   transcribing: 'info',
   transcript: 'ok',
+  'no-speech': 'info',
   failed: 'warn'
 }
 
@@ -33,9 +35,17 @@ export function AppShell(): React.JSX.Element {
   const backend = useBackendStatus()
   const { entries: logEntries, push: pushLog } = useDiagnosticsFeed()
 
+  const [handsFree, dispatchHandsFree] = useReducer(handsFreeReducer, HANDS_FREE_OFF)
+
+  // Every dispatch below is safe while hands-free is off — the reducer
+  // ignores events that don't apply to the current phase.
   const handleChatEvent = useCallback(
     (event: ChatEvent) => {
       pushLog(chatEventLevel[event.kind], event.detail)
+      if (event.kind === 'failed') {
+        // A chat failure is surfaced with a RETRY control; stop the loop.
+        dispatchHandsFree({ type: 'pipeline-error', recoverable: false })
+      }
     },
     [pushLog]
   )
@@ -55,16 +65,35 @@ export function AppShell(): React.JSX.Element {
 
   const handleVoiceEvent = useCallback(
     (event: VoiceEvent) => {
-      pushLog(voiceEventLevel[event.kind], event.detail)
+      // Silent hands-free windows are discarded locally and retried; logging
+      // each one would flood the diagnostics feed.
+      if (event.kind !== 'no-speech') {
+        pushLog(voiceEventLevel[event.kind], event.detail)
+      }
+      if (event.kind === 'transcribing') {
+        dispatchHandsFree({ type: 'capture' })
+      } else if (event.kind === 'no-speech') {
+        dispatchHandsFree({ type: 'no-speech' })
+      } else if (event.kind === 'failed') {
+        dispatchHandsFree({ type: 'pipeline-error', recoverable: true })
+      }
     },
     [pushLog]
   )
 
   const voice = useVoiceInput(handleTranscript, handleVoiceEvent)
+  const { startAuto, cancelCapture, toggle: toggleMic } = voice
 
   const handleSpeechEvent = useCallback(
     (event: SpeechEvent) => {
-      pushLog(event.kind === 'failed' ? 'warn' : 'info', event.detail)
+      if (event.kind === 'failed') {
+        pushLog('warn', event.detail)
+      } else if (event.kind === 'speaking') {
+        pushLog('info', event.detail)
+      }
+      if (event.kind === 'ended' || event.kind === 'failed') {
+        dispatchHandsFree({ type: 'speech-ended' })
+      }
     },
     [pushLog]
   )
@@ -77,9 +106,54 @@ export function AppShell(): React.JSX.Element {
   useEffect(() => {
     const last = messages[messages.length - 1]
     if (last && last.role === 'assistant') {
+      dispatchHandsFree({
+        type: 'pipeline-ok',
+        willSpeak: speech.enabled && speech.available === true
+      })
       speak(last.id, last.content)
     }
-  }, [messages, speak])
+  }, [messages, speak, speech.enabled, speech.available])
+
+  // The hands-free loop: whenever the machine wants to listen and the mic is
+  // free, open the next auto-capture window (silence-terminated, 60s cap).
+  useEffect(() => {
+    if (handsFree.phase === 'listening' && voice.state === 'idle') {
+      startAuto()
+    }
+  }, [handsFree.phase, voice.state, startAuto])
+
+  const toggleHandsFree = useCallback(() => {
+    if (handsFree.phase === 'off') {
+      dispatchHandsFree({ type: 'enable' })
+      pushLog('ok', 'Hands-free conversation on')
+    } else {
+      dispatchHandsFree({ type: 'disable' })
+      cancelCapture()
+      pushLog('info', 'Hands-free conversation off')
+    }
+  }, [handsFree.phase, cancelCapture, pushLog])
+
+  // Manual mic click takes back manual control: hands-free turns off, and if
+  // an auto-capture was mid-recording the toggle stops it and sends the
+  // speech through the normal manual flow.
+  const handleMicToggle = useCallback(() => {
+    if (handsFree.phase !== 'off') {
+      dispatchHandsFree({ type: 'disable' })
+      pushLog('info', 'Manual microphone control — hands-free off')
+    }
+    toggleMic()
+  }, [handsFree.phase, toggleMic, pushLog])
+
+  const { speaking: isSpeaking, stop: stopSpeaking, toggleEnabled: toggleSpeech } = speech
+  const handleSpeakerClick = useCallback(() => {
+    if (isSpeaking) {
+      stopSpeaking()
+      // A manual stop counts as the speech ending for the hands-free loop.
+      dispatchHandsFree({ type: 'speech-ended' })
+    } else {
+      toggleSpeech()
+    }
+  }, [isSpeaking, stopSpeaking, toggleSpeech])
 
   useEffect(() => {
     if (speech.available === true) {
@@ -101,11 +175,13 @@ export function AppShell(): React.JSX.Element {
     ? 'alert'
     : voice.state === 'recording'
       ? 'listening'
-      : isLoading || voice.state === 'transcribing'
-        ? 'processing'
-        : backend.configured
-          ? 'online'
-          : 'standby'
+      : speech.speaking
+        ? 'speaking'
+        : isLoading || voice.state === 'transcribing'
+          ? 'processing'
+          : backend.configured
+            ? 'online'
+            : 'standby'
 
   const handleSubmit = useCallback(() => {
     if (sendMessage(inputValue)) {
@@ -144,11 +220,13 @@ export function AppShell(): React.JSX.Element {
         isLoading={isLoading}
         voiceState={voice.state}
         voiceError={voice.error}
-        onToggleVoice={voice.toggle}
+        onToggleVoice={handleMicToggle}
         speechAvailable={speech.available === true}
         speechEnabled={speech.enabled}
         speaking={speech.speaking}
-        onSpeakerClick={speech.speaking ? speech.stop : speech.toggleEnabled}
+        onSpeakerClick={handleSpeakerClick}
+        handsFreePhase={handsFree.phase}
+        onToggleHandsFree={toggleHandsFree}
       />
     </div>
   )

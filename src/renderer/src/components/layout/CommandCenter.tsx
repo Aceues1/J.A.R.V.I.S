@@ -21,6 +21,7 @@ const statusReadout: Record<StatusLevel, string> = {
   standby: 'Awaiting backend attachment.',
   listening: 'Listening for input.',
   processing: 'Processing request.',
+  speaking: 'Speaking.',
   alert: 'Attention required.'
 }
 

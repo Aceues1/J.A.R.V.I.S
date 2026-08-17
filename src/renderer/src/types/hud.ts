@@ -1,4 +1,4 @@
-export type StatusLevel = 'online' | 'standby' | 'listening' | 'processing' | 'alert'
+export type StatusLevel = 'online' | 'standby' | 'listening' | 'processing' | 'speaking' | 'alert'
 
 export interface NavItem {
   id: string

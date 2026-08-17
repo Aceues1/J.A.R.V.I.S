@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef } from 'react'
 import type { StatusLevel } from '@renderer/types/hud'
 import type { VoiceState } from '@renderer/hooks/useVoiceInput'
+import type { HandsFreePhase } from '@renderer/lib/handsFree'
 import { cn } from '@renderer/lib/cn'
 
 const MAX_INPUT_LENGTH = 4000
@@ -18,6 +19,14 @@ interface CommandBarProps {
   speechEnabled: boolean
   speaking: boolean
   onSpeakerClick: () => void
+  handsFreePhase: HandsFreePhase
+  onToggleHandsFree: () => void
+}
+
+const handsFreeStatusLabel: Record<Exclude<HandsFreePhase, 'off'>, string> = {
+  listening: 'HANDS-FREE // LISTENING — SPEAK, PAUSE TO SEND',
+  thinking: 'HANDS-FREE // THINKING',
+  speaking: 'HANDS-FREE // SPEAKING'
 }
 
 const micLabelByState: Record<VoiceState, string> = {
@@ -38,8 +47,14 @@ export const CommandBar = memo(function CommandBar({
   speechAvailable,
   speechEnabled,
   speaking,
-  onSpeakerClick
+  onSpeakerClick,
+  handsFreePhase,
+  onToggleHandsFree
 }: CommandBarProps): React.JSX.Element {
+  const handsFreeOn = handsFreePhase !== 'off'
+  const handsFreeLabel = handsFreeOn
+    ? 'Turn hands-free conversation off'
+    : 'Turn hands-free conversation on'
   const speakerLabel = !speechAvailable
     ? 'Voice output not configured'
     : speaking
@@ -100,6 +115,39 @@ export const CommandBar = memo(function CommandBar({
         <span className="hidden shrink-0 font-mono text-[10px] tracking-[0.15em] text-ink-dim sm:inline">
           {status.toUpperCase()}
         </span>
+
+        <button
+          type="button"
+          aria-pressed={handsFreeOn}
+          aria-label={handsFreeLabel}
+          title={handsFreeLabel}
+          onClick={onToggleHandsFree}
+          className={cn(
+            'flex h-9 w-9 shrink-0 items-center justify-center border transition-colors',
+            handsFreeOn
+              ? 'border-cyan-bright/80 bg-cyan/15 text-cyan-bright'
+              : 'border-cyan-dim/60 text-ink-dim hover:border-cyan/60 hover:text-cyan',
+            handsFreePhase === 'listening' && 'animate-[var(--animate-blink)]'
+          )}
+        >
+          {/* Conversation-loop glyph: two arrows circling */}
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M3 6.5a5 5 0 0 1 9-1.5" stroke="currentColor" strokeLinecap="round" />
+            <path
+              d="M12.3 2.6v2.6h-2.6"
+              stroke="currentColor"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path d="M13 9.5a5 5 0 0 1-9 1.5" stroke="currentColor" strokeLinecap="round" />
+            <path
+              d="M3.7 13.4v-2.6h2.6"
+              stroke="currentColor"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
 
         <button
           type="button"
@@ -179,9 +227,11 @@ export const CommandBar = memo(function CommandBar({
       >
         {voiceError
           ? voiceError.toUpperCase()
-          : isRecording
-            ? 'LISTENING — CLICK THE MIC AGAIN TO SEND'
-            : 'CLICK THE MIC TO SPEAK · VOICE OUTPUT, TOOLS AND COMPUTER CONTROL ARRIVE IN A LATER PHASE'}
+          : handsFreeOn
+            ? handsFreeStatusLabel[handsFreePhase as Exclude<HandsFreePhase, 'off'>]
+            : isRecording
+              ? 'LISTENING — CLICK THE MIC AGAIN TO SEND'
+              : 'CLICK THE MIC TO SPEAK · USE THE LOOP BUTTON FOR HANDS-FREE CONVERSATION'}
       </p>
     </div>
   )

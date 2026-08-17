@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 export interface SpeechEvent {
-  kind: 'speaking' | 'failed'
+  kind: 'speaking' | 'ended' | 'failed'
   detail: string
 }
 
@@ -93,7 +93,10 @@ export function useSpeechPlayback(onEvent?: (event: SpeechEvent) => void): UseSp
           urlRef.current = url
           audioRef.current = audio
           audio.onended = () => {
-            if (audioRef.current === audio) stop()
+            if (audioRef.current === audio) {
+              stop()
+              onEventRef.current?.({ kind: 'ended', detail: 'Finished speaking' })
+            }
           }
           audio.onerror = () => {
             if (audioRef.current === audio) {
