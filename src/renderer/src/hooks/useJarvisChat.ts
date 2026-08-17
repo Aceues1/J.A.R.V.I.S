@@ -21,6 +21,8 @@ interface UseJarvisChatResult {
   error: string | null
   /** Returns false when nothing was sent (blank text, or a request in flight). */
   sendMessage: (text: string) => boolean
+  /** Append an assistant message locally (no backend call), e.g. the startup greeting. */
+  addAssistantMessage: (text: string) => void
   retry: () => void
 }
 
@@ -86,6 +88,12 @@ export function useJarvisChat(onEvent?: (event: ChatEvent) => void): UseJarvisCh
     [dispatch]
   )
 
+  const addAssistantMessage = useCallback((text: string) => {
+    const message = createMessage('assistant', text)
+    messagesRef.current = [...messagesRef.current, message]
+    setMessages(messagesRef.current)
+  }, [])
+
   const retry = useCallback(() => {
     if (loadingRef.current) return
     const history = messagesRef.current
@@ -94,5 +102,5 @@ export function useJarvisChat(onEvent?: (event: ChatEvent) => void): UseJarvisCh
     void dispatch(history)
   }, [dispatch])
 
-  return { messages, isLoading, error, sendMessage, retry }
+  return { messages, isLoading, error, sendMessage, addAssistantMessage, retry }
 }

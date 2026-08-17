@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useState } from 'react'
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import type { StatusLevel } from '@renderer/types/hud'
 import { useSimulatedTelemetry } from '@renderer/hooks/useSimulatedTelemetry'
 import { useJarvisChat, type ChatEvent } from '@renderer/hooks/useJarvisChat'
@@ -28,6 +28,8 @@ const voiceEventLevel: Record<VoiceEvent['kind'], 'info' | 'ok' | 'warn'> = {
   failed: 'warn'
 }
 
+const STARTUP_GREETING = 'Good evening, sir. All systems are online. How may I assist you?'
+
 export function AppShell(): React.JSX.Element {
   const [activeNavId, setActiveNavId] = useState(navItems[0].id)
   const [inputValue, setInputValue] = useState('')
@@ -50,7 +52,12 @@ export function AppShell(): React.JSX.Element {
     [pushLog]
   )
 
-  const { messages, isLoading, error, sendMessage, retry } = useJarvisChat(handleChatEvent)
+  const { messages, isLoading, error, sendMessage, addAssistantMessage, retry } =
+    useJarvisChat(handleChatEvent)
+
+  // Startup greeting lifecycle: inject once when the backend is ready, then
+  // hand off to hands-free listening after the spoken greeting finishes.
+  const greetingRef = useRef<'idle' | 'waiting-speech' | 'done'>('idle')
 
   // A transcript that can't be sent right now (request already in flight) is
   // parked in the input, visible, instead of being dropped.
@@ -93,6 +100,12 @@ export function AppShell(): React.JSX.Element {
       }
       if (event.kind === 'ended' || event.kind === 'failed') {
         dispatchHandsFree({ type: 'speech-ended' })
+        // The spoken startup greeting has finished — start listening.
+        if (greetingRef.current === 'waiting-speech') {
+          greetingRef.current = 'done'
+          dispatchHandsFree({ type: 'enable' })
+          pushLog('ok', 'Hands-free conversation on')
+        }
       }
     },
     [pushLog]
@@ -170,6 +183,22 @@ export function AppShell(): React.JSX.Element {
       pushLog('warn', 'GROQ_API_KEY not set — AI link offline')
     }
   }, [backend.configured, backend.model, pushLog])
+
+  // Deliver the startup greeting once the backend is ready and the TTS status
+  // is known. When it will be spoken, hands-free starts as the speech ends
+  // (see handleSpeechEvent); otherwise it starts right away.
+  useEffect(() => {
+    if (greetingRef.current !== 'idle') return
+    if (backend.configured !== true || speech.available === null) return
+
+    const willSpeak = speech.enabled && speech.available === true
+    greetingRef.current = willSpeak ? 'waiting-speech' : 'done'
+    addAssistantMessage(STARTUP_GREETING)
+    if (!willSpeak) {
+      dispatchHandsFree({ type: 'enable' })
+      pushLog('ok', 'Hands-free conversation on')
+    }
+  }, [backend.configured, speech.available, speech.enabled, addAssistantMessage, pushLog])
 
   const status: StatusLevel = error
     ? 'alert'
