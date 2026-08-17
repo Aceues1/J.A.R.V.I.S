@@ -91,16 +91,28 @@ describe('synthesizeSpeech via ElevenLabs', () => {
     const result = await synthesizeSpeech('Hello.')
 
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toContain('https://api.elevenlabs.io/v1/text-to-speech/')
+    expect(url).toContain('https://api.elevenlabs.io/v1/text-to-speech/onwK4e9ZLuTAKqWW03F9')
     expect(url).not.toContain('el-test-key')
     expect(init.headers['xi-api-key']).toBe('el-test-key')
     expect(JSON.parse(init.body)).toMatchObject({
       text: 'Hello.',
-      model_id: 'eleven_multilingual_v2'
+      model_id: 'eleven_multilingual_v2',
+      voice_settings: { stability: 0.62, similarity_boost: 0.8 }
     })
     expect(result.mimeType).toBe('audio/mpeg')
     expect(result.audio).toBeInstanceOf(Uint8Array)
     expect(result.audio.byteLength).toBe(3)
+  })
+
+  it('honors delivery tuning overrides and ignores out-of-range values', async () => {
+    vi.stubEnv('ELEVENLABS_STABILITY', '0.9')
+    vi.stubEnv('ELEVENLABS_SIMILARITY', '5')
+    const fetchMock = mockFetchAudio(200)
+    await synthesizeSpeech('Hi')
+
+    const settings = JSON.parse(fetchMock.mock.calls[0][1].body).voice_settings
+    expect(settings.stability).toBe(0.9)
+    expect(settings.similarity_boost).toBe(0.8)
   })
 
   it('honors ELEVENLABS_VOICE_ID and ELEVENLABS_BASE_URL overrides', async () => {

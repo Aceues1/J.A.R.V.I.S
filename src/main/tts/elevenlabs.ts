@@ -3,14 +3,24 @@ import { TtsConfigError, TtsRequestError, type TtsAudio, type TtsProvider } from
 // ElevenLabs text-to-speech — the high-quality option for a polished
 // assistant voice. Requires its own ELEVENLABS_API_KEY.
 const DEFAULT_BASE_URL = 'https://api.elevenlabs.io/v1'
-// "George" — a stock ElevenLabs narration voice with a warm, measured
-// British delivery. A stock catalog voice, not a clone of any real actor.
-const DEFAULT_VOICE_ID = 'JBFqnCBsd6RMkjVDRZzb'
+// "Daniel" — a stock ElevenLabs voice: British, composed, precise, with a
+// slightly detached delivery that suits an AI assistant. An original catalog
+// voice, not a clone of any real actor.
+const DEFAULT_VOICE_ID = 'onwK4e9ZLuTAKqWW03F9'
 const DEFAULT_MODEL = 'eleven_multilingual_v2'
+// Higher stability flattens theatrical swings into the calm, even delivery
+// an assistant voice wants; similarity keeps it close to the source voice.
+const DEFAULT_STABILITY = 0.62
+const DEFAULT_SIMILARITY = 0.8
 const REQUEST_TIMEOUT_MS = 30_000
 
 function getVoiceId(): string {
   return process.env.ELEVENLABS_VOICE_ID || DEFAULT_VOICE_ID
+}
+
+function getTuning(name: string, fallback: number): number {
+  const raw = Number(process.env[name])
+  return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : fallback
 }
 
 export const elevenLabsProvider: TtsProvider = {
@@ -44,7 +54,10 @@ export const elevenLabsProvider: TtsProvider = {
           body: JSON.stringify({
             text,
             model_id: model,
-            voice_settings: { stability: 0.5, similarity_boost: 0.75 }
+            voice_settings: {
+              stability: getTuning('ELEVENLABS_STABILITY', DEFAULT_STABILITY),
+              similarity_boost: getTuning('ELEVENLABS_SIMILARITY', DEFAULT_SIMILARITY)
+            }
           }),
           signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
         }
