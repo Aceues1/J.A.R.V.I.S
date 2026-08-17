@@ -14,6 +14,16 @@ An Electron application with React and TypeScript
 $ npm install
 ```
 
+### AI backend (Groq)
+
+The "Ask Jarvis..." input is wired to Groq. The API key is used only in the
+Electron main process and is never bundled into the renderer.
+
+```bash
+$ cp .env.example .env
+# then edit .env and set GROQ_API_KEY=your-key-from-console.groq.com
+```
+
 ### Development
 
 ```bash

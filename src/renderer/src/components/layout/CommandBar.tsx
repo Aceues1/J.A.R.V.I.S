@@ -2,21 +2,47 @@ import { useState } from 'react'
 import type { StatusLevel } from '@renderer/types/hud'
 import { cn } from '@renderer/lib/cn'
 
-export function CommandBar({ status }: { status: StatusLevel }): React.JSX.Element {
-  const [value, setValue] = useState('')
+interface CommandBarProps {
+  status: StatusLevel
+  value: string
+  onChange: (value: string) => void
+  onSubmit: () => void
+  isLoading: boolean
+}
+
+export function CommandBar({
+  status,
+  value,
+  onChange,
+  onSubmit,
+  isLoading
+}: CommandBarProps): React.JSX.Element {
   const [micActive, setMicActive] = useState(false)
+  const canSubmit = value.trim().length > 0 && !isLoading
 
   return (
     <div className="shrink-0 border-t border-cyan-dim/40 bg-void-deep/80 px-6 py-4">
-      <div className="hud-panel flex items-center gap-3 px-3 py-2.5">
-        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-cyan animate-[var(--animate-blink)]" />
+      <form
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (canSubmit) onSubmit()
+        }}
+        className="hud-panel flex items-center gap-3 px-3 py-2.5"
+      >
+        <span
+          className={cn(
+            'h-1.5 w-1.5 shrink-0 rounded-full bg-cyan',
+            isLoading && 'animate-[var(--animate-blink)]'
+          )}
+        />
 
         <input
           type="text"
           value={value}
-          onChange={(event) => setValue(event.target.value)}
+          onChange={(event) => onChange(event.target.value)}
+          disabled={isLoading}
           placeholder="Ask Jarvis..."
-          className="flex-1 bg-transparent font-sans text-base tracking-wide text-ink placeholder:text-ink-dim/70 focus:outline-none"
+          className="flex-1 bg-transparent font-sans text-base tracking-wide text-ink placeholder:text-ink-dim/70 focus:outline-none disabled:opacity-60"
         />
 
         <span className="hidden shrink-0 font-mono text-[10px] tracking-[0.15em] text-ink-dim sm:inline">
@@ -43,9 +69,10 @@ export function CommandBar({ status }: { status: StatusLevel }): React.JSX.Eleme
         </button>
 
         <button
-          type="button"
+          type="submit"
           aria-label="Send"
-          className="flex h-9 w-9 shrink-0 items-center justify-center border border-cyan/60 text-cyan transition-colors hover:bg-cyan/15"
+          disabled={!canSubmit}
+          className="flex h-9 w-9 shrink-0 items-center justify-center border border-cyan/60 text-cyan transition-colors hover:bg-cyan/15 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
             <path
@@ -56,9 +83,9 @@ export function CommandBar({ status }: { status: StatusLevel }): React.JSX.Eleme
             />
           </svg>
         </button>
-      </div>
+      </form>
       <p className="mt-1.5 px-1 font-mono text-[9px] tracking-[0.15em] text-ink-dim/70">
-        VOICE, TOOLS AND LIVE RESPONSES ARRIVE IN A LATER PHASE — INTERFACE SHELL ONLY
+        VOICE INPUT/OUTPUT, TOOLS AND COMPUTER CONTROL ARRIVE IN A LATER PHASE
       </p>
     </div>
   )

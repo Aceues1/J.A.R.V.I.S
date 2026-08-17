@@ -28,9 +28,22 @@ const system = {
   }
 }
 
+export interface ChatTurn {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export type ChatSendResult = { ok: true; message: string } | { ok: false; error: string }
+
+const chat = {
+  sendMessage: (history: ChatTurn[]): Promise<ChatSendResult> =>
+    ipcRenderer.invoke('chat:send', { messages: history })
+}
+
 const jarvisApi = {
   window: windowControls,
-  system
+  system,
+  chat
 }
 
 export type JarvisApi = typeof jarvisApi

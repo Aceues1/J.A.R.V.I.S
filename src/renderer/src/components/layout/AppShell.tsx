@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { StatusLevel } from '@renderer/types/hud'
 import { useSimulatedTelemetry } from '@renderer/hooks/useSimulatedTelemetry'
+import { useJarvisChat } from '@renderer/hooks/useJarvisChat'
 import {
   conversations,
   diagnosticsLog,
@@ -15,11 +16,19 @@ import { CommandCenter } from './CommandCenter'
 import { RightPanel } from './RightPanel'
 import { CommandBar } from './CommandBar'
 
-const status: StatusLevel = 'standby'
-
 export function AppShell(): React.JSX.Element {
   const [activeNavId, setActiveNavId] = useState(navItems[0].id)
+  const [inputValue, setInputValue] = useState('')
   const metrics = useSimulatedTelemetry()
+  const { messages, isLoading, error, sendMessage } = useJarvisChat()
+
+  const status: StatusLevel = error ? 'alert' : isLoading ? 'processing' : 'online'
+
+  const handleSubmit = (): void => {
+    const text = inputValue
+    setInputValue('')
+    void sendMessage(text)
+  }
 
   return (
     <div className="circuit-grid radial-vignette flex h-screen flex-col bg-void">
@@ -33,10 +42,23 @@ export function AppShell(): React.JSX.Element {
           onSelectNav={setActiveNavId}
           conversations={conversations}
         />
-        <CommandCenter status={status} metrics={metrics} log={diagnosticsLog} />
+        <CommandCenter
+          status={status}
+          metrics={metrics}
+          log={diagnosticsLog}
+          messages={messages}
+          isLoading={isLoading}
+          chatError={error}
+        />
         <RightPanel events={eventItems} notes={noteItems} quotes={marketQuotes} />
       </div>
-      <CommandBar status={status} />
+      <CommandBar
+        status={status}
+        value={inputValue}
+        onChange={setInputValue}
+        onSubmit={handleSubmit}
+        isLoading={isLoading}
+      />
     </div>
   )
 }
