@@ -21,7 +21,7 @@ export const DiagnosticsLog = memo(function DiagnosticsLog({
   }, [entries])
 
   return (
-    <HudPanel title="Diagnostics Feed" eyebrow="Live" bodyClassName="py-2">
+    <HudPanel title="Diagnostics Feed" eyebrow="Live" className="min-w-0" bodyClassName="py-2">
       <div ref={scrollRef} className="max-h-40 space-y-1.5 overflow-y-auto font-mono text-[11px]">
         {entries.map((entry) => (
           <div key={entry.id} className="flex gap-3">
