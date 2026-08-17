@@ -171,3 +171,49 @@ export async function getWeatherReport(): Promise<WeatherReport> {
 export function resetWeatherCache(): void {
   cachedReport = null
 }
+
+// ---- Chat integration ------------------------------------------------------
+// The chat layer injects a compact live-weather block into the system prompt
+// so JARVIS answers weather questions from real data instead of model
+// knowledge. On failure it injects an explicit "unavailable" note so the
+// model says so honestly rather than inventing values.
+
+export const WEATHER_UNAVAILABLE_CONTEXT =
+  '# Live weather feed\n' +
+  'Live weather data is temporarily unavailable. If asked about current weather, say exactly ' +
+  'that — do not guess, estimate, or invent current conditions.'
+
+export function formatWeatherForPrompt(report: WeatherReport): string {
+  const updated = new Date(report.updatedAt).toLocaleTimeString([], { hour12: false })
+  const lines = report.locations.map(
+    (l) =>
+      `- ${l.label}: ${l.temperature}°C (feels like ${l.feelsLike}°C), ${l.condition}, ` +
+      `wind ${l.windSpeed} m/s, today's high ${l.high}°C / low ${l.low}°C.`
+  )
+  return (
+    '# Live weather feed\n' +
+    `Current conditions (updated ${updated}):\n` +
+    `${lines.join('\n')}\n` +
+    'Answer questions about current weather in these locations from this data only, not from ' +
+    'memory. Frøya and Sistranda refer to the first entry.'
+  )
+}
+
+/**
+ * Never throws and never stalls the chat: a cold fetch that exceeds maxWaitMs
+ * falls back to the unavailable note while the fetch continues in the
+ * background to warm the cache for the next turn.
+ */
+export async function getWeatherPromptContext(maxWaitMs = 2500): Promise<string> {
+  try {
+    const report = await Promise.race([
+      getWeatherReport(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new WeatherError('Weather fetch too slow for chat.')), maxWaitMs)
+      )
+    ])
+    return formatWeatherForPrompt(report)
+  } catch {
+    return WEATHER_UNAVAILABLE_CONTEXT
+  }
+}

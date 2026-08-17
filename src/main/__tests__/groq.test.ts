@@ -1,6 +1,48 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GroqConfigError, GroqRequestError, getGroqStatus, requestGroqReply } from '../groq'
 import { SYSTEM_PROMPT } from '../persona'
+import { resetWeatherCache } from '../weather'
+
+const weatherEntry = (code: number, temp: number): object => ({
+  current: {
+    temperature_2m: temp,
+    apparent_temperature: temp - 2,
+    weather_code: code,
+    wind_speed_10m: 5.1
+  },
+  daily: { temperature_2m_max: [temp + 2], temperature_2m_min: [temp - 3] }
+})
+
+/** Routes /forecast and /chat/completions separately; weatherOk=false fails the feed. */
+function mockRoutedFetch(chatBody: unknown, weatherOk = true): ReturnType<typeof vi.fn> {
+  const fetchMock = vi.fn().mockImplementation((url: string) => {
+    if (String(url).includes('/forecast')) {
+      if (!weatherOk) return Promise.reject(new TypeError('fetch failed'))
+      const body = [weatherEntry(3, 12.4), weatherEntry(61, 10.2)]
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify(body)),
+        json: () => Promise.resolve(body)
+      })
+    }
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(JSON.stringify(chatBody)),
+      json: () => Promise.resolve(chatBody)
+    })
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+function chatCallBody(fetchMock: ReturnType<typeof vi.fn>): {
+  messages: Array<{ role: string; content: string }>
+} {
+  const call = fetchMock.mock.calls.find((c) => String(c[0]).includes('/chat/completions'))
+  return JSON.parse(call![1].body)
+}
 
 const history = [{ role: 'user' as const, content: 'hello' }]
 
@@ -19,6 +61,7 @@ function mockFetchResponse(status: number, body: unknown): void {
 
 beforeEach(() => {
   vi.stubEnv('GROQ_API_KEY', 'test-key')
+  resetWeatherCache()
 })
 
 afterEach(() => {
@@ -54,16 +97,37 @@ describe('requestGroqReply', () => {
       { role: 'assistant' as const, content: 'The current record holder, sir, is…' },
       { role: 'user' as const, content: 'What about the second fastest?' }
     ]
-    mockFetchResponse(200, { choices: [{ message: { content: 'ok' } }] })
+    const fetchMock = mockRoutedFetch({ choices: [{ message: { content: 'ok' } }] })
     await requestGroqReply(multiTurn)
 
-    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    const body = chatCallBody(fetchMock)
     expect(body.messages[0].role).toBe('system')
-    expect(body.messages[0].content).toBe(SYSTEM_PROMPT)
+    expect(body.messages[0].content).toContain(SYSTEM_PROMPT)
     // The full transcript follows the system message verbatim — this is what
     // makes follow-ups and pronoun references resolvable by the model.
     expect(body.messages.slice(1)).toEqual(multiTurn)
+  })
+
+  it('injects the live weather feed into the system message', async () => {
+    const fetchMock = mockRoutedFetch({ choices: [{ message: { content: 'ok' } }] })
+    await requestGroqReply([{ role: 'user', content: "What's the weather in Trondheim?" }])
+
+    const system = chatCallBody(fetchMock).messages[0].content
+    expect(system).toContain('# Live weather feed')
+    expect(system).toContain('Sistranda / Frøya: 12°C')
+    expect(system).toContain('Trondheim: 10°C')
+    expect(system).toContain('Light Rain')
+    expect(system).toContain('from this data only')
+  })
+
+  it('injects an explicit unavailable note when the weather feed fails', async () => {
+    const fetchMock = mockRoutedFetch({ choices: [{ message: { content: 'ok' } }] }, false)
+    await requestGroqReply([{ role: 'user', content: 'Is it raining in Sistranda?' }])
+
+    const system = chatCallBody(fetchMock).messages[0].content
+    expect(system).toContain('temporarily unavailable')
+    expect(system).toContain('do not guess, estimate, or invent')
+    expect(system).not.toContain('°C),')
   })
 
   it('throws a config error when the key is missing, without calling fetch', async () => {

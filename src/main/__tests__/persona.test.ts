@@ -52,6 +52,15 @@ describe('persona system prompt', () => {
       /Never state or imply that an action was performed when the application did not perform it/i
     )
     expect(SYSTEM_PROMPT).toMatch(/don't have computer-control access yet/i)
-    expect(SYSTEM_PROMPT).toMatch(/training cutoff/i)
+    expect(SYSTEM_PROMPT).toMatch(/information may be out of date/i)
+  })
+
+  it('grants the live weather capability with strict honesty rules', () => {
+    expect(SYSTEM_PROMPT).toMatch(/weather feed for Sistranda\/Frøya and Trondheim/i)
+    expect(SYSTEM_PROMPT).toMatch(/answer from the live feed, never from memory/i)
+    expect(SYSTEM_PROMPT).toMatch(/never invent or estimate current conditions/i)
+    expect(SYSTEM_PROMPT).toMatch(/live weather data is temporarily unavailable/i)
+    expect(SYSTEM_PROMPT).toMatch(/no live weather for other locations/i)
+    expect(SYSTEM_PROMPT).toMatch(/no other live data of any kind/i)
   })
 })

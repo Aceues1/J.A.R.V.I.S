@@ -2,8 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CACHE_TTL_MS,
   WEATHER_LOCATIONS,
+  WEATHER_UNAVAILABLE_CONTEXT,
   WeatherError,
   describeWeatherCode,
+  formatWeatherForPrompt,
+  getWeatherPromptContext,
   getWeatherReport,
   parseWeatherResponse,
   resetWeatherCache
@@ -157,5 +160,41 @@ describe('getWeatherReport', () => {
 
     mockFetchResponse(200, [entry(), entry()])
     await expect(getWeatherReport()).resolves.toMatchObject({ locations: expect.any(Array) })
+  })
+})
+
+describe('getWeatherPromptContext', () => {
+  it('formats both locations with data, updated time, and the no-memory rule', async () => {
+    mockFetchResponse(200, [entry(), entry({ current: { weather_code: 61, temperature_2m: 9.7 } })])
+    const context = await getWeatherPromptContext()
+
+    expect(context).toContain('# Live weather feed')
+    expect(context).toContain('Sistranda / Frøya: 12°C (feels like 10°C), Overcast')
+    expect(context).toContain('Trondheim: 10°C')
+    expect(context).toContain('Light Rain')
+    expect(context).toContain('wind 6 m/s')
+    expect(context).toContain("today's high 14°C / low 8°C")
+    expect(context).toMatch(/updated \d{2}:\d{2}/)
+    expect(context).toContain('from this data only')
+    expect(context).toContain('Frøya and Sistranda refer to the first entry')
+  })
+
+  it('returns the honest unavailable note when the service fails', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')))
+    await expect(getWeatherPromptContext()).resolves.toBe(WEATHER_UNAVAILABLE_CONTEXT)
+  })
+
+  it('falls back to the unavailable note when the fetch is too slow, without throwing', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(() => new Promise(() => {}))
+    )
+    await expect(getWeatherPromptContext(50)).resolves.toBe(WEATHER_UNAVAILABLE_CONTEXT)
+  })
+
+  it('formatWeatherForPrompt is pure and matches the report values', () => {
+    const report = parseWeatherResponse([entry(), entry()], 0)
+    const text = formatWeatherForPrompt(report)
+    expect(text.match(/°C \(feels like/g)).toHaveLength(2)
   })
 })
