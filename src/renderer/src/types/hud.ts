@@ -49,6 +49,26 @@ export interface NoteItem {
   text: string
 }
 
+export type WeatherIcon =
+  'sun' | 'part-cloud' | 'cloud' | 'fog' | 'drizzle' | 'rain' | 'snow' | 'thunder'
+
+export interface LocationWeather {
+  id: string
+  label: string
+  temperature: number
+  feelsLike: number
+  condition: string
+  icon: WeatherIcon
+  windSpeed: number
+  high: number
+  low: number
+}
+
+export interface WeatherReport {
+  updatedAt: number
+  locations: LocationWeather[]
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'

@@ -64,11 +64,38 @@ const voice = {
   speak: (text: string): Promise<VoiceSpeakResult> => ipcRenderer.invoke('voice:speak', { text })
 }
 
+export type WeatherIcon =
+  'sun' | 'part-cloud' | 'cloud' | 'fog' | 'drizzle' | 'rain' | 'snow' | 'thunder'
+
+export interface LocationWeather {
+  id: string
+  label: string
+  temperature: number
+  feelsLike: number
+  condition: string
+  icon: WeatherIcon
+  windSpeed: number
+  high: number
+  low: number
+}
+
+export interface WeatherReport {
+  updatedAt: number
+  locations: LocationWeather[]
+}
+
+export type WeatherResult = { ok: true; report: WeatherReport } | { ok: false; error: string }
+
+const weather = {
+  get: (): Promise<WeatherResult> => ipcRenderer.invoke('weather:get')
+}
+
 const jarvisApi = {
   window: windowControls,
   system,
   chat,
-  voice
+  voice,
+  weather
 }
 
 export type JarvisApi = typeof jarvisApi

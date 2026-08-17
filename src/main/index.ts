@@ -13,6 +13,7 @@ import {
   synthesizeSpeech,
   validateSpeakPayload
 } from './tts'
+import { WeatherError, getWeatherReport } from './weather'
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -155,6 +156,19 @@ app.whenReady().then(() => {
       }
       console.error('[voice:speak] unexpected error', error)
       return { ok: false as const, error: 'Unexpected error synthesizing speech.' }
+    }
+  })
+
+  ipcMain.handle('weather:get', async () => {
+    try {
+      const report = await getWeatherReport()
+      return { ok: true as const, report }
+    } catch (error) {
+      if (error instanceof WeatherError) {
+        return { ok: false as const, error: error.message }
+      }
+      console.error('[weather:get] unexpected error', error)
+      return { ok: false as const, error: 'Unexpected error fetching weather.' }
     }
   })
 
