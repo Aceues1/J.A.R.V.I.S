@@ -3,7 +3,8 @@ import type { ChatTurn } from './chat-validation'
 // GROQ_BASE_URL is a main-process-only override used by tests to point at a
 // local mock server; production always talks to the real endpoint.
 const DEFAULT_BASE_URL = 'https://api.groq.com/openai/v1'
-const DEFAULT_MODEL = 'llama-3.3-70b-versatile'
+// llama-3.3-70b-versatile was decommissioned by Groq in Aug 2026; requests for it now 404.
+const DEFAULT_MODEL = 'openai/gpt-oss-120b'
 const REQUEST_TIMEOUT_MS = 45_000
 
 const SYSTEM_PROMPT =

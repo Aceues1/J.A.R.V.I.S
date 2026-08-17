@@ -27,7 +27,7 @@ afterEach(() => {
 
 describe('getGroqStatus', () => {
   it('reports configured with the default model', () => {
-    expect(getGroqStatus()).toEqual({ configured: true, model: 'llama-3.3-70b-versatile' })
+    expect(getGroqStatus()).toEqual({ configured: true, model: 'openai/gpt-oss-120b' })
   })
 
   it('reports unconfigured when the key is missing', () => {
@@ -68,6 +68,11 @@ describe('requestGroqReply', () => {
   it('maps a 500 to a generic request error mentioning the status', async () => {
     mockFetchResponse(500, { error: 'boom' })
     await expect(requestGroqReply(history)).rejects.toThrow(/status 500/)
+  })
+
+  it('maps a 404 (e.g. unknown/decommissioned model) to a generic request error mentioning the status', async () => {
+    mockFetchResponse(404, { error: { message: 'model_decommissioned' } })
+    await expect(requestGroqReply(history)).rejects.toThrow(/status 404/)
   })
 
   it('rejects an empty completion as a request error', async () => {
