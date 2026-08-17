@@ -37,13 +37,29 @@ export function getTtsStatus(): { configured: boolean; provider: string; voice: 
   }
 }
 
+// The same reply text feeds both the conversation UI and the voice. The UI
+// keeps the original; for speech we drop markdown scaffolding that reads
+// poorly aloud. The persona discourages markdown in conversation, so this is
+// a safety net, not a formatter.
+export function prepareSpeechText(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, ' Code omitted. ')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/^\s*[-*•]\s+/gm, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 export function validateSpeakPayload(payload: unknown): string | null {
   if (typeof payload !== 'object' || payload === null) return null
   const { text } = payload as { text?: unknown }
   if (typeof text !== 'string') return null
-  const trimmed = text.trim()
-  if (trimmed.length === 0) return null
-  return trimmed.slice(0, MAX_SPEAK_TEXT_LENGTH)
+  const spoken = prepareSpeechText(text)
+  if (spoken.length === 0) return null
+  return spoken.slice(0, MAX_SPEAK_TEXT_LENGTH)
 }
 
 export async function synthesizeSpeech(text: string): Promise<TtsAudio> {

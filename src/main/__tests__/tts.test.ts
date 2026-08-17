@@ -3,6 +3,7 @@ import {
   MAX_SPEAK_TEXT_LENGTH,
   TtsConfigError,
   getTtsStatus,
+  prepareSpeechText,
   resolveTtsProvider,
   synthesizeSpeech,
   validateSpeakPayload
@@ -44,6 +45,26 @@ describe('validateSpeakPayload', () => {
   it('truncates overly long text to the speech cap', () => {
     const result = validateSpeakPayload({ text: 'a'.repeat(MAX_SPEAK_TEXT_LENGTH + 500) })
     expect(result?.length).toBe(MAX_SPEAK_TEXT_LENGTH)
+  })
+
+  it('strips markdown scaffolding for the spoken channel', () => {
+    const text = [
+      '## Summary',
+      'The **first** option uses `npm install`, sir.',
+      '- point one',
+      '- point two',
+      '```js',
+      'console.log("hi")',
+      '```'
+    ].join('\n')
+    expect(validateSpeakPayload({ text })).toBe(
+      'Summary The first option uses npm install, sir. point one point two Code omitted.'
+    )
+  })
+
+  it('leaves plain conversational prose untouched', () => {
+    const text = 'Certainly, sir. The 911 starts at roughly one hundred twenty thousand dollars.'
+    expect(prepareSpeechText(text)).toBe(text)
   })
 })
 

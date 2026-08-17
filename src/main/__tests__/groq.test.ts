@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GroqConfigError, GroqRequestError, getGroqStatus, requestGroqReply } from '../groq'
+import { SYSTEM_PROMPT } from '../persona'
 
 const history = [{ role: 'user' as const, content: 'hello' }]
 
@@ -45,6 +46,24 @@ describe('requestGroqReply', () => {
   it('returns the assistant message content on success', async () => {
     mockFetchResponse(200, { choices: [{ message: { content: 'Hi there.' } }] })
     await expect(requestGroqReply(history)).resolves.toBe('Hi there.')
+  })
+
+  it('sends the persona system prompt followed by the conversation history in order', async () => {
+    const multiTurn = [
+      { role: 'user' as const, content: 'What is the fastest car in the world?' },
+      { role: 'assistant' as const, content: 'The current record holder, sir, is…' },
+      { role: 'user' as const, content: 'What about the second fastest?' }
+    ]
+    mockFetchResponse(200, { choices: [{ message: { content: 'ok' } }] })
+    await requestGroqReply(multiTurn)
+
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body.messages[0].role).toBe('system')
+    expect(body.messages[0].content).toBe(SYSTEM_PROMPT)
+    // The full transcript follows the system message verbatim — this is what
+    // makes follow-ups and pronoun references resolvable by the model.
+    expect(body.messages.slice(1)).toEqual(multiTurn)
   })
 
   it('throws a config error when the key is missing, without calling fetch', async () => {

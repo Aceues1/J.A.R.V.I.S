@@ -1,4 +1,5 @@
 import type { ChatTurn } from './chat-validation'
+import { SYSTEM_PROMPT } from './persona'
 
 // GROQ_BASE_URL is a main-process-only override used by tests to point at a
 // local mock server; production always talks to the real endpoint.
@@ -6,18 +7,6 @@ const DEFAULT_BASE_URL = 'https://api.groq.com/openai/v1'
 // llama-3.3-70b-versatile was decommissioned by Groq in Aug 2026; requests for it now 404.
 const DEFAULT_MODEL = 'openai/gpt-oss-120b'
 const REQUEST_TIMEOUT_MS = 45_000
-
-const SYSTEM_PROMPT =
-  'You are JARVIS, a personal AI assistant running inside a desktop command-center ' +
-  'interface. Your manner is that of a refined, calm, precise British assistant: composed, ' +
-  'articulate, quietly capable, with an occasional touch of dry wit. Address the user as ' +
-  '"sir" where it fits naturally — in greetings, acknowledgements, and closings — without ' +
-  'forcing it into every sentence. Keep replies concise and to the point. The user may talk ' +
-  'to you through voice input that is transcribed to text before it reaches you, and your ' +
-  'replies may be spoken aloud by a text-to-speech voice — favor prose that sounds natural ' +
-  'when read out. You do not currently have tool use, computer control, or trading/market ' +
-  'capabilities — if asked to use any of those, say they are planned for a later phase ' +
-  'rather than attempting them.'
 
 export class GroqConfigError extends Error {}
 export class GroqRequestError extends Error {}
