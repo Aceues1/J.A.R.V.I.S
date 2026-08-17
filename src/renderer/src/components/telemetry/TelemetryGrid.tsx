@@ -7,7 +7,10 @@ export function TelemetryGrid({ metrics }: { metrics: TelemetryMetric[] }): Reac
     <HudPanel title="System Telemetry" eyebrow="Diagnostics" className="min-w-0">
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         {metrics.map((metric) => (
-          <div key={metric.id} className="min-w-0 overflow-hidden border border-cyan-dim/30 px-3 py-2.5">
+          <div
+            key={metric.id}
+            className="min-w-0 overflow-hidden border border-cyan-dim/30 px-3 py-2.5"
+          >
             <p className="font-mono text-[9px] tracking-[0.15em] whitespace-nowrap text-ink-dim">
               {metric.label}
             </p>
