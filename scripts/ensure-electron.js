@@ -2,34 +2,32 @@
 /**
  * Guarantees the real Electron binary is present in node_modules/electron/dist.
  *
- * Why this exists: on some machines (confirmed: Windows + Windows Defender)
- * electron's own postinstall (node_modules/electron/install.js) can silently
- * no-op or die with zero output, and a plain `npm install` afterwards reports
- * "up to date" without ever re-running that script — npm only tracks whether
- * the electron *package* was extracted, not whether its postinstall side
- * effect (downloading the ~200MB platform binary) actually succeeded.
+ * Why this exists: npm's own install-script security can silently skip
+ * electron's postinstall (node_modules/electron/install.js) — the step that
+ * downloads the ~200MB platform binary — and a plain `npm install` afterwards
+ * reports "up to date" without ever re-running it, since npm only tracks
+ * whether the electron *package* was extracted, not whether that side effect
+ * actually completed. This script re-implements just that one download +
+ * extraction step directly, using Electron's own official download and
+ * checksum-verification library (@electron/get) and the same extraction
+ * library electron itself uses.
  *
- * On Windows specifically, the confirmed root cause is Windows Defender's
- * cloud-delivered protection (MAPS): it does an async reputation check on a
- * freshly-written, unsigned .exe and can quarantine it seconds after the
- * initial on-write scan already passed. This is a well-documented false
- * positive against generic Electron release binaries, not a real threat.
- *
- * Confirmed on real hardware: running `Add-MpPreference -ExclusionPath ...`
- * from an elevated terminal can complete with NO error, and Defender can
- * STILL quarantine the file afterward. Windows Tamper Protection is designed
- * to silently block exactly this kind of automated change to security
- * settings, even from an elevated PowerShell session — that's its entire
- * purpose, and it's a Windows feature this script has no business trying to
- * work around. So a "successful" Add-MpPreference call, and even Defender
- * reporting the exclusion as present in `Get-MpPreference`, are NOT reliable
- * signals that real-time protection will actually honor it. This script no
- * longer shortens its safety margin based on either signal, and instead
- * always waits out a full settle window and reports Tamper Protection status
- * directly (read-only, no elevation needed) so the user knows exactly why a
- * PowerShell-based fix may not be sticking, and that the Windows Security
- * app itself — not PowerShell — is the reliable way to add the exclusion
- * when Tamper Protection is on.
+ * On Windows, this can also collide with Windows Defender flagging the
+ * generic, unsigned Electron binary as a false positive and quarantining it
+ * shortly after it's written. THIS SCRIPT DOES NOT TRY TO FIX THAT. An
+ * earlier version of this file called PowerShell (Add-MpPreference,
+ * Get-MpPreference, Get-MpComputerStatus, Get-MpThreat) to inspect and
+ * modify Defender's exclusion list automatically. That was a mistake:
+ * Defender's behavioral engine flagged the resulting node.exe process itself
+ * as suspicious (Behavior:Win32/NodeSussProcLaunch.D) — a Node.js process
+ * spawning PowerShell to modify the antivirus's own configuration is exactly
+ * the pattern real malware droppers use to disable protection before
+ * dropping a payload, so a legitimate installer doing the same thing for
+ * good reasons still looks identical to Defender's heuristics. This script
+ * therefore spawns NO child processes and touches NO security settings, on
+ * any platform. If Windows Defender quarantines the binary, that's reported
+ * clearly as plain text in the failure message, with manual (GUI-only) steps
+ * — never anything this script attempts on the user's behalf.
  *
  * Every code path here prints something — there is no silent success or
  * failure — and it's wired via predev, prestart, prebuild:win/mac/linux, and
@@ -43,6 +41,8 @@ const os = require('os')
 
 const TIMEOUT_MS = Number(process.env.ENSURE_ELECTRON_TIMEOUT_MS) || 5 * 60 * 1000
 const MIN_BINARY_BYTES = 30 * 1024 * 1024 // real electron binaries are 100MB+
+const SETTLE_DELAY_MS = 1500
+const SETTLE_CHECKS = 8 // ~12s of polling this process's own filesystem state — no child processes involved
 
 let settled = false
 
@@ -57,7 +57,7 @@ function fail(msg, err) {
     console.error(`[ensure-electron] ${err.stack || err.message || err}`)
   }
   console.error(`
-[ensure-electron] If this wasn't a Defender quarantine (see above), other causes:
+[ensure-electron] Other possible causes:
   - A corporate proxy or firewall blocking github.com / githubusercontent.com.
     If you're behind a proxy, set HTTPS_PROXY / HTTP_PROXY env vars, or set
     an Electron mirror: set ELECTRON_MIRROR=<your-internal-mirror-url>
@@ -88,9 +88,7 @@ process.on('exit', (code) => {
         code +
         ') without reaching a normal completion path.\n' +
         '[ensure-electron] This strongly suggests something OUTSIDE Node.js — antivirus, an\n' +
-        '[ensure-electron] EDR agent, or a corporate proxy — is terminating the download.\n' +
-        '[ensure-electron] Check your antivirus / security software logs for node.exe activity\n' +
-        '[ensure-electron] around this timestamp, or try running from an elevated terminal.'
+        '[ensure-electron] EDR agent, or a corporate proxy — is terminating the download.'
     )
   }
 })
@@ -134,152 +132,35 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function runPowershell(command, timeoutMs = 10000) {
-  const { execFileSync } = require('child_process')
-  return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
-    timeout: timeoutMs,
-    windowsHide: true
-  })
-    .toString()
-    .trim()
-}
+function quarantineFailureMessage(electronDir, platformPath) {
+  return `dist/${platformPath} was missing or was deleted shortly after extraction. On \
+Windows this is almost always Windows Defender quarantining the file — a well-documented \
+false-positive pattern against generic, unsigned Electron release binaries, not a real \
+threat.
 
-// Reading the current exclusion list (Get-MpPreference) does NOT require
-// admin rights, even though ADDING one (Add/Set-MpPreference) does. Note
-// this is still only what Defender's *local preference store* reports, not
-// proof that real-time protection actually honors it — see module doc above.
-function isDefenderExclusionActive(targetDir) {
-  if (process.platform !== 'win32') return null
-  try {
-    const escaped = targetDir.replace(/'/g, "''")
-    const out = runPowershell(
-      `$p = (Get-MpPreference).ExclusionPath; if ($p -contains '${escaped}') { 'YES' } else { 'NO' }`
-    )
-    return out === 'YES'
-  } catch {
-    return null // Defender module unavailable, PowerShell blocked, or Defender not in use
-  }
-}
+[ensure-electron] This script does not keep retrying: every attempt extracts the identical \
+bytes from the same downloaded zip, so Defender would reach the identical verdict every \
+time — repeating it would only waste your time. It also does not run PowerShell or touch \
+any security settings on its own; that behavior previously triggered a SEPARATE Defender \
+detection (Behavior:Win32/NodeSussProcLaunch.D) against node.exe itself, because a Node \
+process spawning PowerShell to modify antivirus configuration looks identical to a common \
+malware technique, however legitimate the reason. So the fix has to be something you do \
+by hand, in the Windows Security app itself — not something automated here:
 
-// Read-only, no elevation needed. This is the direct, confirmable answer to
-// "why did my elevated Add-MpPreference command succeed with no error but
-// not actually protect the file" — Tamper Protection blocks security-setting
-// changes made outside the Windows Security app itself, including from an
-// elevated PowerShell session, while often still letting the cmdlet report
-// success.
-function isTamperProtectionOn() {
-  if (process.platform !== 'win32') return null
-  try {
-    const out = runPowershell('(Get-MpComputerStatus).IsTamperProtected')
-    if (out === 'True') return true
-    if (out === 'False') return false
-    return null
-  } catch {
-    return null
-  }
-}
-
-// Best-effort, read-only, purely diagnostic — lets the user see the actual
-// detected threat name for their own investigation or to submit a false
-// positive report to Microsoft. Never fatal if it fails; cmdlet
-// availability and required fields vary across Defender platform versions.
-function recentThreatDetections() {
-  if (process.platform !== 'win32') return null
-  try {
-    const out = runPowershell(
-      'Get-MpThreat | Select-Object -First 3 ThreatName,SeverityID | ConvertTo-Json -Compress'
-    )
-    if (!out) return null
-    const parsed = JSON.parse(out)
-    return Array.isArray(parsed) ? parsed : [parsed]
-  } catch {
-    return null
-  }
-}
-
-function manualExclusionInstructions(targetDir, tamperProtected) {
-  const psCaveat =
-    tamperProtected === true
-      ? '[ensure-electron]   NOTE: Tamper Protection is ON on this machine (confirmed below), which\n' +
-        '[ensure-electron]   is almost certainly why Add-MpPreference reported success earlier but did\n' +
-        '[ensure-electron]   not actually protect the file. Use Option A below, not PowerShell.\n[ensure-electron]\n'
-      : ''
-
-  return (
-    psCaveat +
-    `[ensure-electron]   Option A (reliable even with Tamper Protection on) — Windows Security app:
-[ensure-electron]     Windows Security > Virus & threat protection > Manage settings
-[ensure-electron]     (under "Virus & threat protection settings") > Add or remove exclusions
-[ensure-electron]     > Add an exclusion > Folder > select:
-[ensure-electron]       ${targetDir}
+[ensure-electron]   1. Windows Security > Virus & threat protection > Manage settings
+[ensure-electron]      (under "Virus & threat protection settings") > Add or remove
+[ensure-electron]      exclusions > Add an exclusion > Folder > select:
+[ensure-electron]        ${electronDir}
+[ensure-electron]   2. Then re-run: npm run ensure-electron
 [ensure-electron]
-[ensure-electron]   Option B — elevated PowerShell (works only if Tamper Protection is OFF):
-[ensure-electron]     Add-MpPreference -ExclusionPath '${targetDir}'
-[ensure-electron]
-[ensure-electron]   Option C — if you have no admin access on this machine at all: open
-[ensure-electron]   Windows Security > Virus & threat protection > Protection history, find
-[ensure-electron]   the "electron.exe" / "electron-vXX-win32-x64.zip" detection, and use
-[ensure-electron]   Actions > Restore. This recovers just this one file without an exclusion,
-[ensure-electron]   but Defender will likely re-quarantine it on the next fresh download.
+[ensure-electron]   If you have no admin access on this machine at all: Windows Security >
+[ensure-electron]   Virus & threat protection > Protection history > find the detection >
+[ensure-electron]   Actions > Restore. This recovers just this one file without an
+[ensure-electron]   exclusion, but Defender will likely re-quarantine it on the next fresh
+[ensure-electron]   download.
 [ensure-electron]
 [ensure-electron]   For a permanent, upstream fix: submit the file as a false positive at
-[ensure-electron]   https://www.microsoft.com/en-us/wdsi/filesubmission — this is a
-[ensure-electron]   widely-reported false detection against generic Electron release builds.`
-  )
-}
-
-// Windows Defender's cloud-delivered protection (MAPS) does an async
-// reputation check on freshly-written, unsigned executables and can
-// quarantine them seconds after they're written and already passed the
-// initial on-write scan. On top of that, Tamper Protection means neither
-// "Add-MpPreference succeeded" nor "Get-MpPreference lists the exclusion"
-// can be trusted as proof that real-time protection will actually leave the
-// file alone — so this function's return value is informational only and
-// must NOT be used to shorten any safety margin downstream.
-function checkWindowsDefenderExclusion(targetDir, verbose) {
-  if (process.platform !== 'win32') return { platform: false, active: null, tamperProtected: null }
-
-  let active = isDefenderExclusionActive(targetDir)
-
-  if (active === false) {
-    try {
-      const escaped = targetDir.replace(/'/g, "''")
-      runPowershell(`Add-MpPreference -ExclusionPath '${escaped}'`)
-      active = isDefenderExclusionActive(targetDir)
-    } catch (err) {
-      if (verbose) log(`Add-MpPreference attempt failed: ${err.message || err}`)
-    }
-  }
-
-  const tamperProtected = isTamperProtectionOn()
-
-  console.log('')
-  if (active === true) {
-    log(`Get-MpPreference reports an exclusion for: ${targetDir}`)
-    if (tamperProtected === true) {
-      log(
-        'Tamper Protection is ON, though — that reading alone is not proof real-time protection'
-      )
-      log('honors it. Waiting out a full settle window below regardless.')
-    }
-  } else if (active === false) {
-    log(`No Windows Defender exclusion is active for: ${targetDir}`)
-  } else {
-    log('could not determine Windows Defender exclusion status')
-  }
-  if (tamperProtected === true) {
-    log('Tamper Protection: ON — PowerShell-based Defender changes may silently not stick.')
-  } else if (tamperProtected === false) {
-    log('Tamper Protection: OFF')
-  }
-  if (active !== true || tamperProtected === true) {
-    log('')
-    log('THE FIX, if the Electron binary keeps getting quarantined below:')
-    console.log(manualExclusionInstructions(targetDir, tamperProtected))
-  }
-  console.log('')
-
-  return { platform: true, active, tamperProtected }
+[ensure-electron]   https://www.microsoft.com/en-us/wdsi/filesubmission`
 }
 
 async function main() {
@@ -298,12 +179,6 @@ async function main() {
     succeed(`binary already present at dist/${platformPath} — nothing to do`)
     return
   }
-
-  // Check (and best-effort try to fix) Defender status before spending time
-  // and bandwidth on the download. Its result is informational only — see
-  // the big comment on checkWindowsDefenderExclusion for why neither signal
-  // it returns can be trusted to skip or shorten the verification below.
-  const defender = checkWindowsDefenderExclusion(electronDir, verbose)
 
   log(`binary missing or invalid at dist/${platformPath}, downloading...`)
   if (verbose) {
@@ -378,15 +253,9 @@ async function main() {
 
   const distDir = path.join(electronDir, 'dist')
 
-  // A single attempt, always — regardless of what checkWindowsDefenderExclusion
-  // reported. Confirmed on real hardware: even a "confirmed active" exclusion
-  // reading does not reliably mean the file survives, so there is no signal
-  // here that justifies either retrying (all attempts extract byte-identical
-  // content from the same zip; Defender's verdict won't differ between them)
-  // or shortening the settle window that verifies the outcome.
-  const SETTLE_DELAY_MS = 1500
-  const SETTLE_CHECKS = 8 // ~12s — long enough to reliably observe the async quarantine
-
+  // A single attempt, always: every attempt would extract byte-identical
+  // content from this same zip, so a real quarantine's verdict can't differ
+  // between retries — there's nothing to gain from looping.
   log('extracting...')
   try {
     await extract(zipPath, { dir: distDir })
@@ -404,24 +273,25 @@ async function main() {
   }
 
   if (!binaryLooksValid(electronDir, platformPath)) {
-    fail(quarantineFailureMessage(electronDir, platformPath, defender))
+    fail(quarantineFailureMessage(electronDir, platformPath))
     return
   }
 
-  // The binary exists right now. Windows Defender's cloud-delivered
+  // The binary exists right now. On Windows, Defender's cloud-delivered
   // protection can quarantine a freshly-written, unsigned .exe a moment
   // *after* it's written and passes an initial scan — so watch it for a
   // while before trusting it, instead of declaring success the instant it
-  // first appears.
-  log('binary present — confirming it survives antivirus scanning before finishing...')
+  // first appears. This only polls this process's own filesystem state
+  // (fs.statSync) — it spawns nothing.
+  log('binary present — confirming it is still there a moment later...')
   for (let i = 0; i < SETTLE_CHECKS; i++) {
     await sleep(SETTLE_DELAY_MS)
     if (!binaryLooksValid(electronDir, platformPath)) {
       log(
         `dist/${platformPath} disappeared ${(((i + 1) * SETTLE_DELAY_MS) / 1000).toFixed(1)}s ` +
-          'after extraction — Windows Defender quarantined it.'
+          'after extraction.'
       )
-      fail(quarantineFailureMessage(electronDir, platformPath, defender))
+      fail(quarantineFailureMessage(electronDir, platformPath))
       return
     }
   }
@@ -429,28 +299,6 @@ async function main() {
   const finalPath = path.join(distDir, platformPath)
   const finalStat = fs.statSync(finalPath)
   succeed(`installed successfully: ${finalPath} (${(finalStat.size / 1024 / 1024).toFixed(0)}MB)`)
-}
-
-function quarantineFailureMessage(electronDir, platformPath, defender) {
-  const threats = process.platform === 'win32' ? recentThreatDetections() : null
-  let threatBlock = ''
-  if (threats && threats.length > 0) {
-    threatBlock =
-      '\n[ensure-electron] Recent Defender detections (most recent first):\n' +
-      threats.map((t) => `[ensure-electron]   ${t.ThreatName} (severity ${t.SeverityID})`).join('\n') +
-      '\n'
-  }
-
-  return (
-    `dist/${platformPath} was missing or was deleted shortly after extraction. This is ` +
-    'Windows Defender quarantining the file — a well-documented false-positive pattern ' +
-    'against generic, unsigned Electron release binaries, not a real threat.' +
-    threatBlock +
-    '\n[ensure-electron] This script does not keep retrying: every attempt extracts the ' +
-    'identical bytes from the same downloaded zip, so Defender would reach the identical ' +
-    'verdict every time — repeating it would only waste your time.\n\n' +
-    manualExclusionInstructions(electronDir, defender && defender.tamperProtected)
-  )
 }
 
 main().catch((err) => {

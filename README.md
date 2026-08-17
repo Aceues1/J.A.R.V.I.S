@@ -39,21 +39,28 @@ Windows Defender's cloud-delivered protection flags the generic, unsigned
 Electron binary as a threat and quarantines it — this is a well-documented
 false positive against Electron release builds, not a real threat.
 
-If you hit this, the script prints exactly what to do, but the short version:
+`ensure-electron.js` does **not** run PowerShell or touch any security
+settings on its own — an earlier version tried to, and that automation
+itself triggered a separate Defender detection
+(`Behavior:Win32/NodeSussProcLaunch.D`) against `node.exe`, since a Node
+process spawning PowerShell to modify antivirus configuration looks
+identical to a common malware technique. So the fix, if you hit this, is
+always manual, done by hand in the Windows Security app:
 
-1. **Add an exclusion via the Windows Security app itself** — Virus & threat
-   protection > Manage settings > Add or remove exclusions > Add an exclusion
-   > Folder > select `node_modules\electron`.
-2. If Add-MpPreference from an elevated PowerShell reports success but
-   Defender still quarantines the file anyway, **Tamper Protection is almost
-   certainly on** — it deliberately blocks security-setting changes made
-   outside the Windows Security app, even from an elevated session, and can
-   let the PowerShell command report success without it actually taking
-   effect. Step 1 above is the reliable fix in that case, not PowerShell.
-3. For a permanent fix, submit the file as a false positive at
+1. Windows Security > Virus & threat protection > Manage settings (under
+   "Virus & threat protection settings") > Add or remove exclusions > Add
+   an exclusion > Folder > select `node_modules\electron`.
+2. Re-run `npm run ensure-electron` (or `npm run dev`).
+3. If you have no admin access on this machine at all: Windows Security >
+   Virus & threat protection > Protection history > find the detection >
+   Actions > Restore. This recovers just the one file without an
+   exclusion, but Defender will likely re-quarantine it on the next fresh
+   download.
+4. For a permanent, upstream fix: submit the file as a false positive at
    https://www.microsoft.com/en-us/wdsi/filesubmission.
 
-This never involves disabling Windows Defender.
+This never involves disabling Windows Defender, and the script never
+attempts to add the exclusion for you.
 
 ### Build
 
