@@ -2,23 +2,28 @@
 /**
  * Guarantees the real Electron binary is present in node_modules/electron/dist.
  *
- * Why this exists: on some machines (seen on Windows, likely antivirus/EDR/proxy
- * interference) electron's own postinstall (node_modules/electron/install.js) can
- * silently no-op or die with zero output, and a plain `npm install` afterwards
- * reports "up to date" without ever re-running that script — npm only tracks
- * whether the electron *package* was extracted, not whether its postinstall
- * side effect (downloading the ~200MB platform binary) actually succeeded.
+ * Why this exists: on some machines (confirmed: Windows + Windows Defender)
+ * electron's own postinstall (node_modules/electron/install.js) can silently
+ * no-op or die with zero output, and a plain `npm install` afterwards reports
+ * "up to date" without ever re-running that script — npm only tracks whether
+ * the electron *package* was extracted, not whether its postinstall side
+ * effect (downloading the ~200MB platform binary) actually succeeded.
  *
- * This script re-implements that one side effect directly, using Electron's own
- * official download + checksum-verification library (@electron/get) and the same
- * extraction library electron itself uses, but with three guarantees the stock
- * script doesn't make:
- *   1. Every code path prints something. There is no silent success or failure.
- *   2. A hard timeout turns a silent hang (proxy/firewall/AV swallowing the
- *      request) into a loud, actionable error instead of nothing.
- *   3. It's idempotent and safe to run before every `dev`/`start`/`build` via
- *      npm's automatic pre<script> hooks, so a broken binary self-heals instead
- *      of failing deep inside Electron with a confusing error.
+ * On Windows specifically, the confirmed root cause is Windows Defender's
+ * cloud-delivered protection (MAPS): it does an async reputation check on a
+ * freshly-written, unsigned .exe and can quarantine it seconds after the
+ * initial on-write scan already passed. This is a well-documented false
+ * positive against generic Electron release binaries, not a real threat —
+ * but it means extraction can genuinely succeed and the file still vanishes
+ * moments later. A folder-scoped Defender exclusion is the only fix with no
+ * race condition in it; this script detects, attempts, and clearly reports
+ * that status, and does NOT keep blindly retrying once it already knows a
+ * retry can't change the outcome.
+ *
+ * Every code path here prints something — there is no silent success or
+ * failure — and it's wired via predev, prestart, prebuild:win/mac/linux, and
+ * postinstall so a broken binary self-heals before Electron ever tries to
+ * launch.
  */
 
 const fs = require('fs')
@@ -41,12 +46,7 @@ function fail(msg, err) {
     console.error(`[ensure-electron] ${err.stack || err.message || err}`)
   }
   console.error(`
-[ensure-electron] This means the Electron binary download did not complete.
-Most common causes on Windows:
-  - Antivirus / EDR (Defender, CrowdStrike, etc.) silently blocking or killing
-    node.exe while it downloads from github.com. Try adding this project
-    folder to your antivirus exclusions, or temporarily disable real-time
-    protection and re-run: npm run ensure-electron
+[ensure-electron] If this wasn't a Defender quarantine (see above), other causes:
   - A corporate proxy or firewall blocking github.com / githubusercontent.com.
     If you're behind a proxy, set HTTPS_PROXY / HTTP_PROXY env vars, or set
     an Electron mirror: set ELECTRON_MIRROR=<your-internal-mirror-url>
@@ -57,18 +57,16 @@ Re-run with more detail:
   npm run ensure-electron -- --verbose
 `)
   // Force-exit rather than setting exitCode: the whole point of the timeout
-  // above is to escape a silently-hung download promise. If we just set
-  // exitCode and let the event loop drain naturally, that orphaned promise
-  // keeps the process alive forever in exactly the scenario this guards
-  // against, and the timeout protection never actually takes effect.
+  // and settle-window logic below is to escape a silently-hung or
+  // eventually-quarantined download. If we just set exitCode and let the
+  // event loop drain naturally, an orphaned promise or timer could keep the
+  // process alive far longer than intended.
   process.exit(1)
 }
 
 function succeed(msg) {
   settled = true
   log(msg)
-  // Force-exit for the same reason as fail(): don't let a lingering
-  // keep-alive socket from the HTTP client silently hold the process open.
   process.exit(0)
 }
 
@@ -117,18 +115,6 @@ function binaryLooksValid(electronDir, platformPath) {
   }
 }
 
-function quarantineFailureMessage(electronDir, platformPath) {
-  return (
-    `dist/${platformPath} was missing or was deleted shortly after extraction on every ` +
-    'attempt. This is almost certainly Windows Defender (or another antivirus/EDR) ' +
-    'quarantining the file, not a real extraction bug — it is a well-known false-positive ' +
-    'pattern against generic Electron release binaries, not a real threat.\n\n' +
-    '[ensure-electron] To fix this permanently, add an exclusion:\n' +
-    manualExclusionInstructions(electronDir) +
-    '\n[ensure-electron] Then re-run: npm run ensure-electron'
-  )
-}
-
 function sleep(ms) {
   // Deliberately NOT .unref()'d: this is used to actively wait out settle
   // windows during extraction verification, and an unref'd timer lets Node
@@ -165,13 +151,24 @@ function isDefenderExclusionActive(targetDir) {
 }
 
 function manualExclusionInstructions(targetDir) {
-  return `[ensure-electron]   Option A — elevated PowerShell (Run as Administrator):
-[ensure-electron]     Add-MpPreference -ExclusionPath '${targetDir}'
-[ensure-electron]   Option B — Windows Security app:
+  return `[ensure-electron]   Option A (recommended) — run this exact command ONCE from an
+[ensure-electron]   elevated terminal ("Run as Administrator"), then go back to your normal
+[ensure-electron]   non-elevated terminal for everyday use — the exclusion persists:
+[ensure-electron]     npm run ensure-electron
+[ensure-electron]   (or manually: Add-MpPreference -ExclusionPath '${targetDir}')
+[ensure-electron]
+[ensure-electron]   Option B — Windows Security app (no elevated terminal needed, but the
+[ensure-electron]   app itself will prompt for admin approval when you save):
 [ensure-electron]     Windows Security > Virus & threat protection > Manage settings
 [ensure-electron]     (under "Virus & threat protection settings") > Add or remove exclusions
 [ensure-electron]     > Add an exclusion > Folder > select:
-[ensure-electron]       ${targetDir}`
+[ensure-electron]       ${targetDir}
+[ensure-electron]
+[ensure-electron]   Option C — if you truly have no admin access on this machine: open
+[ensure-electron]   Windows Security > Virus & threat protection > Protection history, find
+[ensure-electron]   the "electron.exe" / "electron-vXX-win32-x64.zip" detection, and use
+[ensure-electron]   Actions > Restore. This recovers just this one file without an exclusion,
+[ensure-electron]   but Defender will likely re-quarantine it on the next fresh download.`
 }
 
 // Windows Defender's cloud-delivered protection (MAPS) does an async
@@ -179,11 +176,11 @@ function manualExclusionInstructions(targetDir) {
 // quarantine them seconds after they're written and already passed the
 // initial on-write scan — this is a well-documented false-positive pattern
 // for generic Electron release binaries specifically, not a real threat.
-// A folder-scoped exclusion is the only fully reliable fix; adding one
-// requires admin rights, so this is best-effort and the result is always
-// reported plainly (never silently swallowed) so the caller can decide how
-// long to defensively wait out the async scan.
-function ensureWindowsDefenderExclusion(targetDir, verbose) {
+// A folder-scoped exclusion is the only fix with no race condition in it;
+// adding one requires admin rights, so this is best-effort, and the result
+// is always reported plainly — never silently swallowed — so the caller
+// can decide whether it's even worth attempting a download at all right now.
+function checkWindowsDefenderExclusion(targetDir, verbose) {
   if (process.platform !== 'win32') return { platform: false, active: null }
 
   let active = isDefenderExclusionActive(targetDir)
@@ -201,10 +198,15 @@ function ensureWindowsDefenderExclusion(targetDir, verbose) {
   console.log('')
   if (active === true) {
     log(`Windows Defender exclusion CONFIRMED ACTIVE for: ${targetDir}`)
+    log('Defender will not scan this folder — safe to proceed.')
   } else if (active === false) {
     log(`Windows Defender exclusion NOT active for: ${targetDir}`)
-    log('Defender may quarantine the Electron binary after this script reports success.')
-    log('For a permanent fix, add an exclusion yourself:')
+    log(
+      'Defender is very likely to quarantine the Electron binary during or shortly after'
+    )
+    log('extraction. Proceeding anyway, but this attempt will probably fail — see below.')
+    log('')
+    log('THE FIX (do this, then re-run):')
     console.log(manualExclusionInstructions(targetDir))
   } else {
     log('could not determine Windows Defender exclusion status (continuing anyway)')
@@ -230,6 +232,12 @@ async function main() {
     succeed(`binary already present at dist/${platformPath} — nothing to do`)
     return
   }
+
+  // Check (and try to fix) Defender status BEFORE spending time and
+  // bandwidth on a download that a confirmed-inactive exclusion means is
+  // very likely to be wasted.
+  const defender = checkWindowsDefenderExclusion(electronDir, verbose)
+  const confirmedProtected = defender.active === true
 
   log(`binary missing or invalid at dist/${platformPath}, downloading...`)
   if (verbose) {
@@ -303,21 +311,25 @@ async function main() {
   }
 
   const distDir = path.join(electronDir, 'dist')
-  const defender = ensureWindowsDefenderExclusion(electronDir, verbose)
 
-  const MAX_ATTEMPTS = 3
+  // Without a confirmed-active exclusion, we already know from direct
+  // real-world testing that retrying extraction is very likely futile: all
+  // attempts extract from this same already-downloaded zip, so the
+  // resulting bytes — and Defender's verdict on them — are identical every
+  // time. Retrying 2-3 more times just burns minutes for a near-certain
+  // repeat of the same outcome. So: one attempt, one moderate settle
+  // window, then stop and report clearly instead of looping.
+  const MAX_ATTEMPTS = confirmedProtected ? 3 : 1
   const SETTLE_DELAY_MS = 1500
-  // With a confirmed exclusion, Defender won't touch this file at all, so a
-  // short settle window is just a sanity check. Without one, we're racing
-  // Defender's async cloud reputation lookup blind — it can take well over
-  // the original 6s window this used, so wait much longer before trusting
-  // the file. This is a mitigation, not a guarantee; the exclusion printed
-  // above is the only fix with no race condition in it.
-  const SETTLE_CHECKS = defender.active === true ? 3 : 14
+  const SETTLE_CHECKS = confirmedProtected ? 3 : 8 // ~4.5s vs ~12s
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const isLastAttempt = attempt === MAX_ATTEMPTS
-    log(`extracting (attempt ${attempt}/${MAX_ATTEMPTS})...`)
+    if (MAX_ATTEMPTS > 1) {
+      log(`extracting (attempt ${attempt}/${MAX_ATTEMPTS})...`)
+    } else {
+      log('extracting...')
+    }
 
     try {
       await extract(zipPath, { dir: distDir })
@@ -341,7 +353,11 @@ async function main() {
 
     if (!binaryLooksValid(electronDir, platformPath)) {
       if (isLastAttempt) {
-        fail(quarantineFailureMessage(electronDir, platformPath))
+        fail(
+          `dist/${platformPath} is missing immediately after extraction. This matches the ` +
+            'Windows Defender quarantine pattern confirmed on this machine — see the fix ' +
+            'above, before this download started.'
+        )
         return
       }
       log(`dist/${platformPath} missing right after extraction, retrying...`)
@@ -362,7 +378,7 @@ async function main() {
         stable = false
         log(
           `dist/${platformPath} disappeared ${(((i + 1) * SETTLE_DELAY_MS) / 1000).toFixed(1)}s ` +
-            'after extraction — antivirus almost certainly quarantined it'
+            'after extraction — Windows Defender quarantined it, as predicted above.'
         )
         break
       }
@@ -378,7 +394,13 @@ async function main() {
     }
 
     if (isLastAttempt) {
-      fail(quarantineFailureMessage(electronDir, platformPath))
+      fail(
+        `dist/${platformPath} was quarantined by Windows Defender shortly after extraction, ` +
+          'exactly as predicted before this download started. Retrying would extract the ' +
+          'identical bytes from the same zip and get the identical result, so this script ' +
+          "stopped after one attempt instead of wasting your time repeating it. Add the\n" +
+          '[ensure-electron] exclusion shown above, then re-run: npm run ensure-electron'
+      )
       return
     }
     log('retrying extraction from the already-downloaded archive...')
