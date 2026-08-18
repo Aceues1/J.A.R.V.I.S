@@ -112,6 +112,15 @@ describe('persona system prompt', () => {
     expect(SYSTEM_PROMPT).toMatch(/information may be out of date/i)
   })
 
+  it('grants awareness data with honesty and read-only rules', () => {
+    expect(SYSTEM_PROMPT).toMatch(/awareness block each turn/i)
+    expect(SYSTEM_PROMPT).toMatch(/never from model guesses/i)
+    expect(SYSTEM_PROMPT).toMatch(/not configured or unavailable, say so plainly/i)
+    expect(SYSTEM_PROMPT).toMatch(/strictly read-only/i)
+    expect(SYSTEM_PROMPT).toMatch(/cannot change, open, close, or clean anything/i)
+    expect(SYSTEM_PROMPT).toMatch(/Never fabricate a reading/i)
+  })
+
   it('grants the live weather capability with strict honesty rules', () => {
     expect(SYSTEM_PROMPT).toMatch(/weather feed for Sistranda\/Frøya and Trondheim/i)
     expect(SYSTEM_PROMPT).toMatch(/answer from the live feed, never from memory/i)

@@ -1,0 +1,13 @@
+{
+  "_comment": "Copy to jarvis.schedule.json (or point JARVIS_SCHEDULE_PATH at it). List your working days under week — days you leave out count as days off. overrides lets specific dates (YYYY-MM-DD) replace the weekly pattern, e.g. vacation or an extra shift.",
+  "week": {
+    "monday": { "working": true, "start": "07:00", "end": "15:00", "label": "day shift" },
+    "tuesday": { "working": true, "start": "07:00", "end": "15:00", "label": "day shift" },
+    "wednesday": { "working": true, "start": "07:00", "end": "15:00", "label": "day shift" },
+    "thursday": { "working": true, "start": "07:00", "end": "15:00", "label": "day shift" },
+    "friday": { "working": true, "start": "07:00", "end": "13:00", "label": "short day" }
+  },
+  "overrides": {
+    "2026-12-24": { "working": false, "label": "christmas eve" }
+  }
+}

@@ -5,6 +5,7 @@ import { useJarvisChat, type ChatEvent } from '@renderer/hooks/useJarvisChat'
 import { useVoiceInput, type VoiceEvent } from '@renderer/hooks/useVoiceInput'
 import { useSpeechPlayback, type SpeechEvent } from '@renderer/hooks/useSpeechPlayback'
 import { HANDS_FREE_OFF, handsFreeReducer } from '@renderer/lib/handsFree'
+import { buildStartupGreeting } from '@renderer/lib/greeting'
 import { useBackendStatus } from '@renderer/hooks/useBackendStatus'
 import { useDiagnosticsFeed } from '@renderer/hooks/useDiagnosticsFeed'
 import { conversations, eventItems, marketQuotes, navItems, noteItems } from '@renderer/data/mock'
@@ -27,8 +28,6 @@ const voiceEventLevel: Record<VoiceEvent['kind'], 'info' | 'ok' | 'warn'> = {
   'no-speech': 'info',
   failed: 'warn'
 }
-
-const STARTUP_GREETING = 'Good evening, sir. All systems are online. How may I assist you?'
 
 export function AppShell(): React.JSX.Element {
   const [activeNavId, setActiveNavId] = useState(navItems[0].id)
@@ -193,7 +192,7 @@ export function AppShell(): React.JSX.Element {
 
     const willSpeak = speech.enabled && speech.available === true
     greetingRef.current = willSpeak ? 'waiting-speech' : 'done'
-    addAssistantMessage(STARTUP_GREETING)
+    addAssistantMessage(buildStartupGreeting())
     if (!willSpeak) {
       dispatchHandsFree({ type: 'enable' })
       pushLog('ok', 'Hands-free conversation on')

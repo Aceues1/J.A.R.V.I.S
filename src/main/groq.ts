@@ -1,6 +1,6 @@
 import type { ChatTurn } from './chat-validation'
 import { SYSTEM_PROMPT } from './persona'
-import { getWeatherPromptContext } from './weather'
+import { getAwarenessContext } from './awareness'
 
 // GROQ_BASE_URL is a main-process-only override used by tests to point at a
 // local mock server; production always talks to the real endpoint.
@@ -33,9 +33,10 @@ export async function requestGroqReply(history: ChatTurn[]): Promise<string> {
   const apiKey = getApiKey()
   const baseUrl = process.env.GROQ_BASE_URL || DEFAULT_BASE_URL
   const model = process.env.GROQ_MODEL || DEFAULT_MODEL
-  // Live data available to JARVIS this turn; usually served from the warm
-  // weather cache, and capped so a cold/slow fetch never stalls the chat.
-  const weatherContext = await getWeatherPromptContext()
+  // Awareness snapshot for this turn (time, location, schedule, system,
+  // weather) — cheap: local reads plus the cached weather feed, with the
+  // weather fetch capped so a cold/slow fetch never stalls the chat.
+  const weatherContext = await getAwarenessContext()
 
   let response: Response
   try {

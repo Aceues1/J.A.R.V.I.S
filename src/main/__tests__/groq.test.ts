@@ -108,6 +108,20 @@ describe('requestGroqReply', () => {
     expect(body.messages.slice(1)).toEqual(multiTurn)
   })
 
+  it('injects the awareness block into the system message', async () => {
+    vi.stubEnv('JARVIS_LOCATION', '')
+    vi.stubEnv('JARVIS_SCHEDULE_PATH', '/nonexistent/jarvis-schedule.json')
+    const fetchMock = mockRoutedFetch({ choices: [{ message: { content: 'ok' } }] })
+    await requestGroqReply([{ role: 'user', content: 'What time is it?' }])
+
+    const system = chatCallBody(fetchMock).messages[0].content
+    expect(system).toContain('# Awareness')
+    expect(system).toMatch(/Current local date and time: \w+ \d+ \w+ \d{4}, \d{2}:\d{2}/)
+    expect(system).toMatch(/System status \(read-only\): CPU \d+%/)
+    expect(system).toContain('Work schedule: not configured')
+    expect(system).toContain('Location: not configured')
+  })
+
   it('injects the live weather feed into the system message', async () => {
     const fetchMock = mockRoutedFetch({ choices: [{ message: { content: 'ok' } }] })
     await requestGroqReply([{ role: 'user', content: "What's the weather in Trondheim?" }])

@@ -14,6 +14,7 @@ import {
   validateSpeakPayload
 } from './tts'
 import { WeatherError, getWeatherReport } from './weather'
+import { getSystemStatus } from './awareness'
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -156,6 +157,15 @@ app.whenReady().then(() => {
       }
       console.error('[voice:speak] unexpected error', error)
       return { ok: false as const, error: 'Unexpected error synthesizing speech.' }
+    }
+  })
+
+  ipcMain.handle('system:status', async () => {
+    try {
+      return { ok: true as const, status: await getSystemStatus() }
+    } catch (error) {
+      console.error('[system:status] unexpected error', error)
+      return { ok: false as const, error: 'System status unavailable.' }
     }
   })
 

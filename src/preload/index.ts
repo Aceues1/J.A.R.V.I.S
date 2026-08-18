@@ -19,13 +19,30 @@ const windowControls = {
   }
 }
 
+export interface SystemStatus {
+  cpuModel: string
+  coreCount: number
+  cpuUsagePercent: number
+  ramTotalGb: number
+  ramUsedGb: number
+  ramUsedPercent: number
+  diskTotalGb: number | null
+  diskFreeGb: number | null
+  diskUsedPercent: number | null
+  uptimeHours: number
+  platform: string
+}
+
+export type SystemStatusResult = { ok: true; status: SystemStatus } | { ok: false; error: string }
+
 const system = {
   platform: process.platform,
   versions: {
     chrome: process.versions.chrome,
     node: process.versions.node,
     electron: process.versions.electron
-  }
+  },
+  getStatus: (): Promise<SystemStatusResult> => ipcRenderer.invoke('system:status')
 }
 
 export interface ChatTurn {

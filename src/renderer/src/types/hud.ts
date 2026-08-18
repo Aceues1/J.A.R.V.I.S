@@ -69,6 +69,20 @@ export interface WeatherReport {
   locations: LocationWeather[]
 }
 
+export interface SystemStatus {
+  cpuModel: string
+  coreCount: number
+  cpuUsagePercent: number
+  ramTotalGb: number
+  ramUsedGb: number
+  ramUsedPercent: number
+  diskTotalGb: number | null
+  diskFreeGb: number | null
+  diskUsedPercent: number | null
+  uptimeHours: number
+  platform: string
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
