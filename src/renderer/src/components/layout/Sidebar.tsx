@@ -22,7 +22,7 @@ export function Sidebar({
   conversations
 }: SidebarProps): React.JSX.Element {
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-cyan-dim/40 bg-void-deep/60">
+    <aside className="hidden w-64 shrink-0 flex-col border-r border-cyan-dim/40 bg-void-deep/60 lg:flex">
       <IdentityBlock status={status} />
       <SystemStatusBlock metrics={metrics.slice(0, 2)} />
       <NavList items={navItems} activeId={activeNavId} onSelect={onSelectNav} />

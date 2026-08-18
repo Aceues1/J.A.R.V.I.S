@@ -45,8 +45,10 @@ function createWindow(): void {
   const mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
-    minWidth: 1180,
-    minHeight: 760,
+    // Small enough for a slim side-by-side companion window; the HUD sheds
+    // its side panels responsively below the Tailwind lg/xl breakpoints.
+    minWidth: 460,
+    minHeight: 600,
     show: false,
     frame: false,
     backgroundColor: '#05080c',

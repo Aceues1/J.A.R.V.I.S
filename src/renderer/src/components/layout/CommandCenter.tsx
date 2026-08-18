@@ -58,7 +58,9 @@ export function CommandCenter({
         <div
           className={cn(
             'transition-all duration-700 ease-out',
-            hasConversation ? 'h-[150px] w-[150px]' : 'h-[320px] w-[320px]'
+            hasConversation
+              ? 'h-[110px] w-[110px] md:h-[150px] md:w-[150px]'
+              : 'h-[220px] w-[220px] md:h-[320px] md:w-[320px]'
           )}
         >
           <AICore status={status} />
@@ -88,7 +90,7 @@ export function CommandCenter({
         />
       </div>
 
-      <div className="relative grid shrink-0 grid-cols-1 gap-4 px-6 pb-6 lg:grid-cols-[1.4fr_1fr]">
+      <div className="relative hidden shrink-0 grid-cols-1 gap-4 px-6 pb-6 md:grid lg:grid-cols-[1.4fr_1fr]">
         <TelemetryGrid metrics={metrics} />
         <DiagnosticsLog entries={log} />
       </div>

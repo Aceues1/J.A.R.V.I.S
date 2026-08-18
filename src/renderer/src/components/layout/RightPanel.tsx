@@ -18,7 +18,7 @@ export const RightPanel = memo(function RightPanel({
   quotes
 }: RightPanelProps): React.JSX.Element {
   return (
-    <aside className="w-80 shrink-0 space-y-4 overflow-y-auto border-l border-cyan-dim/40 bg-void-deep/60 p-4">
+    <aside className="hidden w-80 shrink-0 space-y-4 overflow-y-auto border-l border-cyan-dim/40 bg-void-deep/60 p-4 xl:block">
       <SystemInfoCard />
       <WeatherCard />
       <MarketModule quotes={quotes} />
