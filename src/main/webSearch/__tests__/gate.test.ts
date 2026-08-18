@@ -134,4 +134,90 @@ describe('runSearchGate', () => {
     await runSearchGate([user('latest AI news?')])
     expect(JSON.parse(fetchMock.mock.calls[0][1].body).model).toBe('my-tiny-model')
   })
+
+  // REGRESSION (Windows PRO 3 bug): gpt-oss gate models are reasoning models —
+  // max_tokens caps reasoning + answer combined. A tight cap (120) starved the
+  // reasoning channel, returned EMPTY content, and silently failed every gate
+  // closed, so no live search ever ran. Pin the headroom and the low effort.
+  it('gives the reasoning gate model real token headroom and low reasoning effort', async () => {
+    const fetchMock = gateReply('{"search":true,"query":"latest AI news"}')
+    await runSearchGate([user('latest AI news?')])
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body.max_tokens).toBeGreaterThanOrEqual(512)
+    expect(body.reasoning_effort).toBe('low')
+  })
+
+  it('omits reasoning_effort for non-gpt-oss override models', async () => {
+    vi.stubEnv('GROQ_GATE_MODEL', 'llama-x-8b')
+    const fetchMock = gateReply('{"search":false}')
+    await runSearchGate([user('latest AI news?')])
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect('reasoning_effort' in body).toBe(false)
+  })
+
+  it('recovers the decision from message.reasoning when content is empty', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            choices: [
+              {
+                finish_reason: 'length',
+                message: {
+                  content: '',
+                  reasoning: 'The user wants news. {"search":true,"query":"latest AI news"}'
+                }
+              }
+            ]
+          })
+      })
+    )
+    await expect(runSearchGate([user('latest AI news?')])).resolves.toEqual({
+      search: true,
+      query: 'latest AI news'
+    })
+  })
+
+  it('retries once with the main chat model when the gate model is rejected (4xx)', async () => {
+    vi.stubEnv('GROQ_MODEL', 'main-chat-model')
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        text: () => Promise.resolve('model_decommissioned'),
+        json: () => Promise.resolve({})
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            choices: [{ message: { content: '{"search":true,"query":"latest AI news"}' } }]
+          })
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(runSearchGate([user('latest AI news?')])).resolves.toEqual({
+      search: true,
+      query: 'latest AI news'
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).model).toBe('main-chat-model')
+  })
+
+  it('does not retry on server errors (5xx) — fails closed instead', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      text: () => Promise.resolve('overloaded'),
+      json: () => Promise.resolve({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(runSearchGate([user('latest AI news?')])).resolves.toEqual({ search: false })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
 })

@@ -95,15 +95,22 @@ export async function searchWeb(
   if (braveConfigured()) {
     try {
       const results = await searchBrave(query)
-      if (results.length > 0) return { source: 'Brave Search', results }
+      if (results.length > 0) {
+        console.log(`[websearch] Brave fallback returned ${results.length} results`)
+        return { source: 'Brave Search', results }
+      }
+      console.error('[websearch] Brave fallback returned no results')
     } catch (error) {
       console.error('[websearch] Brave fallback failed', error)
     }
+  } else {
+    console.log('[websearch] Brave fallback skipped (no BRAVE_SEARCH_API_KEY)')
   }
 
   if (isAiNewsQuery(query)) {
     try {
       const results = await fetchTechCrunchAiNews()
+      console.log(`[websearch] TechCrunch fallback returned ${results.length} items`)
       return { source: 'TechCrunch RSS', results }
     } catch (error) {
       console.error('[websearch] TechCrunch fallback failed', error)
@@ -122,6 +129,7 @@ async function buildSpecializedOrGeneral(query: string): Promise<LiveSearchConte
   // and general queries never hit the specialized endpoints.
   const market = detectMarketQuery(query)
   if (market) {
+    console.log(`[websearch] classified as MARKET (${market.symbol}) — using Yahoo Finance`)
     const quote = await fetchMarketQuote(market).then(
       (q) => ({
         block:
@@ -150,6 +158,7 @@ async function buildSpecializedOrGeneral(query: string): Promise<LiveSearchConte
 
   const weatherLocation = detectOtherLocationWeather(query)
   if (weatherLocation) {
+    console.log(`[websearch] classified as WEATHER (${weatherLocation}) — using wttr.in`)
     return fetchWttrWeather(weatherLocation).then(
       (w) => ({
         block:
@@ -177,6 +186,7 @@ async function buildSpecializedOrGeneral(query: string): Promise<LiveSearchConte
 
   const instagramUser = detectInstagramQuery(query)
   if (instagramUser) {
+    console.log(`[websearch] classified as INSTAGRAM (@${instagramUser})`)
     return fetchInstagramFollowers(instagramUser).then(
       (ig) => ({
         block:
@@ -199,6 +209,7 @@ async function buildSpecializedOrGeneral(query: string): Promise<LiveSearchConte
     )
   }
 
+  console.log('[websearch] classified as GENERAL — layered web search')
   try {
     const { source, results } = await searchWeb(query)
     return { block: formatResultsBlock(query, source, results), source, query, ok: true }
@@ -230,11 +241,17 @@ export async function getLiveSearchContext(history: ChatTurn[]): Promise<LiveSea
     const cacheKey = query.toLowerCase()
     const hit = cache.get(cacheKey)
     if (hit && Date.now() - hit.at < SEARCH_CACHE_TTL_MS && hit.value.ok) {
+      console.log(`[websearch] cache hit for "${query}" (${hit.value.source})`)
       return hit.value
     }
 
     const context = await buildSpecializedOrGeneral(query)
     cache.set(cacheKey, { at: Date.now(), value: context })
+    console.log(
+      context.ok
+        ? `[websearch] context block injected (source=${context.source}, ${context.block.length} chars)`
+        : `[websearch] all sources failed for "${query}" — honest failure block injected`
+    )
     return context
   } catch (error) {
     // Belt-and-braces: nothing in the search stack may break the chat turn.

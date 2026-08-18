@@ -11,7 +11,15 @@ import { getApiKey } from '../groq'
 const DEFAULT_BASE_URL = 'https://api.groq.com/openai/v1'
 // Small, fast model for the yes/no gate; override with GROQ_GATE_MODEL.
 const DEFAULT_GATE_MODEL = 'openai/gpt-oss-20b'
+// Fallback: the main chat model — proven working on this machine. Used when
+// the gate model itself is rejected (decommissioned/renamed/bad params).
+const FALLBACK_GATE_MODEL = (): string => process.env.GROQ_MODEL || 'openai/gpt-oss-120b'
 const GATE_TIMEOUT_MS = 10_000
+// gpt-oss are REASONING models: max_tokens caps reasoning + answer combined.
+// A tight cap starves the reasoning channel and returns EMPTY content, which
+// silently fails the gate closed. Keep generous headroom — the visible JSON
+// answer itself is tiny.
+const GATE_MAX_TOKENS = 768
 // Enough turns to resolve "them"/"it" without shipping the whole transcript.
 const GATE_HISTORY_TURNS = 6
 const GATE_TURN_MAX_CHARS = 300
@@ -85,6 +93,7 @@ export async function runSearchGate(history: ChatTurn[]): Promise<GateDecision> 
   try {
     apiKey = getApiKey()
   } catch {
+    console.error('[websearch:gate] no API key configured — skipping gate')
     return { search: false }
   }
   const baseUrl = process.env.GROQ_BASE_URL || DEFAULT_BASE_URL
@@ -94,6 +103,50 @@ export async function runSearchGate(history: ChatTurn[]): Promise<GateDecision> 
     .slice(-GATE_HISTORY_TURNS)
     .map((turn) => ({ role: turn.role, content: turn.content.slice(0, GATE_TURN_MAX_CHARS) }))
 
+  console.log(`[websearch:gate] started (model=${model}) for: "${latest.slice(0, 80)}"`)
+  const decision = await callGateModel(baseUrl, apiKey, model, recent, true)
+  if (decision) {
+    console.log(
+      decision.search
+        ? `[websearch:gate] decision: search=true query="${decision.query}"`
+        : '[websearch:gate] decision: search=false'
+    )
+    return decision
+  }
+  console.error('[websearch:gate] gate unusable — failing closed (no search this turn)')
+  return { search: false }
+}
+
+interface GateChoice {
+  finish_reason?: unknown
+  message?: { content?: unknown; reasoning?: unknown }
+}
+
+/**
+ * One gate request. Returns null when the call produced no usable decision.
+ * If the gate model itself is rejected (HTTP 4xx — decommissioned model or
+ * unsupported parameter), retries once with the main chat model, which is
+ * known to work because ordinary chat uses it.
+ */
+async function callGateModel(
+  baseUrl: string,
+  apiKey: string,
+  model: string,
+  recent: Array<{ role: string; content: string }>,
+  allowModelFallback: boolean
+): Promise<GateDecision | null> {
+  const body: Record<string, unknown> = {
+    model,
+    messages: [{ role: 'system', content: GATE_SYSTEM_PROMPT }, ...recent],
+    temperature: 0,
+    max_tokens: GATE_MAX_TOKENS
+  }
+  // Keep the reasoning channel short on reasoning models — the gate's answer
+  // is one line of JSON; long deliberation is wasted latency and tokens.
+  if (model.includes('gpt-oss')) {
+    body.reasoning_effort = 'low'
+  }
+
   try {
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
@@ -101,26 +154,41 @@ export async function runSearchGate(history: ChatTurn[]): Promise<GateDecision> 
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'system', content: GATE_SYSTEM_PROMPT }, ...recent],
-        temperature: 0,
-        max_tokens: 120
-      }),
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(GATE_TIMEOUT_MS)
     })
     if (!response.ok) {
-      console.error('[websearch:gate] HTTP', response.status)
-      return { search: false }
+      const errorText = await response.text().catch(() => '')
+      console.error(`[websearch:gate] HTTP ${response.status}: ${errorText.slice(0, 200)}`)
+      // 4xx = this model/parameter combination is rejected — retry once with
+      // the main chat model before giving up.
+      const fallback = FALLBACK_GATE_MODEL()
+      if (allowModelFallback && response.status < 500 && model !== fallback) {
+        console.error(`[websearch:gate] retrying with main chat model ${fallback}`)
+        return callGateModel(baseUrl, apiKey, fallback, recent, false)
+      }
+      return null
     }
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: unknown } }>
+    const data = (await response.json()) as { choices?: GateChoice[] }
+    const choice = data?.choices?.[0]
+    const content = typeof choice?.message?.content === 'string' ? choice.message.content : ''
+    let decision = content ? parseGateReply(content) : null
+    if (!decision) {
+      // Reasoning models can return the text in message.reasoning with empty
+      // content (especially when the token cap cuts the answer short).
+      const reasoning =
+        typeof choice?.message?.reasoning === 'string' ? choice.message.reasoning : ''
+      if (reasoning) decision = parseGateReply(reasoning)
     }
-    const content = data?.choices?.[0]?.message?.content
-    if (typeof content !== 'string') return { search: false }
-    return parseGateReply(content) ?? { search: false }
+    if (!decision) {
+      console.error(
+        `[websearch:gate] unparseable reply (finish_reason=${String(choice?.finish_reason)}, ` +
+          `content_chars=${content.length}): "${content.slice(0, 160)}"`
+      )
+    }
+    return decision
   } catch (error) {
-    console.error('[websearch:gate] failed', error)
-    return { search: false }
+    console.error('[websearch:gate] request failed', error)
+    return null
   }
 }

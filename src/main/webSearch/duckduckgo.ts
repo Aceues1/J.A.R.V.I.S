@@ -95,5 +95,15 @@ export async function searchDuckDuckGo(query: string): Promise<SearchResult[]> {
     throw new WebSearchError('DuckDuckGo returned an unreadable response.')
   }
 
-  return cleanResults(parseDuckDuckGoHtml(html))
+  const results = cleanResults(parseDuckDuckGoHtml(html))
+  console.log(
+    `[websearch:ddg] HTTP ${response.status}, ${html.length} chars, ${results.length} results parsed`
+  )
+  if (results.length === 0) {
+    // Parser/page-shape diagnosis: a sanitized preview in the terminal only —
+    // never surfaced to the renderer or the model.
+    const preview = html.replace(/\s+/g, ' ').slice(0, 300)
+    console.error(`[websearch:ddg] 0 results — page preview: ${preview}`)
+  }
+  return results
 }

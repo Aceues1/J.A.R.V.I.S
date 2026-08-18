@@ -21,6 +21,7 @@ import { registerScreenCapturer, routeReply } from './control/router'
 import { MAX_SCREENS, type ScreenImage } from './vision'
 import { serveRendererDirectory } from './renderer-server'
 import { getLiveSearchContext } from './webSearch'
+import { runWebSearchSelfTest, selfTestEnabled } from './webSearch/debug'
 
 // Captures every monitor as a labelled JPEG data URL. desktopCapturer reads
 // the displays themselves, so this works while the JARVIS window is
@@ -99,6 +100,13 @@ app.whenReady().then(() => {
   registerAppsDir(app.getPath('userData'))
   registerExternalOpener((url) => shell.openExternal(url))
   registerScreenCapturer(captureAllScreens)
+
+  // Optional per-source web-search self-test (JARVIS_WEBSEARCH_DEBUG=1):
+  // exercises each live source from the main process and prints PASS/FAIL to
+  // the terminal — no model, no renderer, no secrets in the output.
+  if (selfTestEnabled()) {
+    void runWebSearchSelfTest()
+  }
 
   // The renderer only ever needs the microphone; deny every other permission.
   session.defaultSession.setPermissionRequestHandler(
