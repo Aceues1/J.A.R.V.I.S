@@ -33,6 +33,21 @@ const WINDOWS_DEFAULTS: AppDefinition[] = [
     candidates: ['%LOCALAPPDATA%\\Discord\\Update.exe'],
     args: ['--processStart', 'Discord.exe']
   },
+  // Edge is listed before Chrome and carries the generic "browser" aliases:
+  // it ships with Windows, so "open my browser" always has a working target
+  // even on machines without Chrome. Exact-alias resolution returns the
+  // first registry match, so "chrome" still reaches Chrome when installed.
+  {
+    id: 'edge',
+    name: 'Microsoft Edge',
+    aliases: ['edge', 'microsoft edge', 'browser', 'my browser', 'the browser', 'web browser'],
+    candidates: [
+      '%PROGRAMFILES(X86)%\\Microsoft\\Edge\\Application\\msedge.exe',
+      '%PROGRAMFILES%\\Microsoft\\Edge\\Application\\msedge.exe',
+      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+      '%LOCALAPPDATA%\\Microsoft\\Edge\\Application\\msedge.exe'
+    ]
+  },
   {
     id: 'chrome',
     name: 'Google Chrome',
@@ -42,12 +57,6 @@ const WINDOWS_DEFAULTS: AppDefinition[] = [
       '%PROGRAMFILES(X86)%\\Google\\Chrome\\Application\\chrome.exe',
       '%LOCALAPPDATA%\\Google\\Chrome\\Application\\chrome.exe'
     ]
-  },
-  {
-    id: 'edge',
-    name: 'Microsoft Edge',
-    aliases: ['edge', 'microsoft edge'],
-    candidates: ['%PROGRAMFILES(X86)%\\Microsoft\\Edge\\Application\\msedge.exe']
   },
   {
     id: 'spotify',

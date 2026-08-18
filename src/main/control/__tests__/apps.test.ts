@@ -43,6 +43,28 @@ describe('loadAppRegistry', () => {
     expect(registry[0].id).toBe('good')
   })
 
+  it('routes generic browser aliases to Edge in the seeded defaults', () => {
+    vi.stubEnv('JARVIS_APPS_PATH', tempAppsFile())
+    const registry = loadAppRegistry()
+
+    // Edge precedes Chrome so "my browser" works on machines without Chrome;
+    // the Chrome entry itself stays intact for machines that have it.
+    expect(registry.findIndex((a) => a.id === 'edge')).toBeLessThan(
+      registry.findIndex((a) => a.id === 'chrome')
+    )
+    for (const phrase of ['my browser', 'browser', 'the browser', 'web browser', 'edge']) {
+      expect(resolveApp(phrase)?.id).toBe('edge')
+    }
+    expect(resolveApp('chrome')?.id).toBe('chrome')
+    expect(resolveApp('google chrome')?.id).toBe('chrome')
+
+    const edge = registry.find((a) => a.id === 'edge')!
+    expect(edge.candidates.length).toBeGreaterThanOrEqual(3)
+    expect(edge.candidates).toContain(
+      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
+    )
+  })
+
   it('treats a malformed file as an empty registry without crashing', () => {
     vi.stubEnv('JARVIS_APPS_PATH', tempAppsFile('{broken json'))
     expect(loadAppRegistry()).toEqual([])
