@@ -13,6 +13,13 @@ export type CanonicalAction =
   | 'pause_video'
   | 'resume_video'
   | 'set_volume'
+  | 'play_music'
+  | 'pause_music'
+  | 'resume_music'
+  | 'next_track'
+  | 'previous_track'
+  | 'music_volume_up'
+  | 'music_volume_down'
 
 export interface ActionEnvelope {
   action: CanonicalAction
@@ -88,7 +95,54 @@ const ACTION_SYNONYMS: Record<CanonicalAction, string[]> = {
     'unpause_video',
     'play_again'
   ],
-  set_volume: ['set_volume', 'setvolume', 'volume', 'change_volume', 'adjust_volume']
+  set_volume: ['set_volume', 'setvolume', 'volume', 'change_volume', 'adjust_volume'],
+  play_music: [
+    'play_music',
+    'playmusic',
+    'play_song',
+    'play_track',
+    'play_a_song',
+    'spotify_play',
+    'play_spotify',
+    'play_on_spotify',
+    'spotify'
+  ],
+  pause_music: ['pause_music', 'pause_song', 'pause_spotify', 'spotify_pause', 'pause_the_music'],
+  resume_music: [
+    'resume_music',
+    'resume_song',
+    'resume_spotify',
+    'spotify_resume',
+    'unpause_music',
+    'continue_music',
+    'resume_the_music'
+  ],
+  next_track: ['next_track', 'next_song', 'next', 'skip', 'skip_track', 'skip_song', 'skip_this'],
+  previous_track: [
+    'previous_track',
+    'previous_song',
+    'previous',
+    'prev',
+    'prev_track',
+    'last_song',
+    'go_back_a_song'
+  ],
+  music_volume_up: [
+    'music_volume_up',
+    'volume_up',
+    'turn_it_up',
+    'turn_up_the_volume',
+    'louder',
+    'spotify_volume_up'
+  ],
+  music_volume_down: [
+    'music_volume_down',
+    'volume_down',
+    'turn_it_down',
+    'turn_down_the_volume',
+    'quieter',
+    'spotify_volume_down'
+  ]
 }
 
 export function canonIntent(raw: unknown): CanonicalAction | null {

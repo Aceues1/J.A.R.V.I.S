@@ -4,6 +4,8 @@ import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { registerScreenCapturer, routeReply } from '../router'
 import { registerExternalOpener } from '../websites'
+import { registerSpotifyOpener, registerSpotifyStatePush } from '../../spotify'
+import { resetAccessTokenCache } from '../../spotify/tokens'
 
 const appsFile = (() => {
   const dir = mkdtempSync(join(tmpdir(), 'jarvis-router-'))
@@ -187,5 +189,134 @@ describe('routeReply', () => {
     const bad = await routeReply('{"action":"set_volume","target":"loud"}', 'volume loud')
     expect(bad.player).toBeUndefined()
     expect(bad.text).toContain('between 0 and 100')
+  })
+})
+
+describe('routeReply — Spotify actions', () => {
+  const statePushes: unknown[] = []
+
+  function stubSpotifyApi(
+    overrides: Record<string, { status?: number; body?: unknown }> = {}
+  ): void {
+    vi.stubEnv('SPOTIFY_TOKEN_PATH', spotifyTokenFile)
+    vi.stubEnv('SPOTIFY_CLIENT_ID', 'cid')
+    vi.stubEnv('SPOTIFY_CLIENT_SECRET', 'csec')
+    writeFileSync(spotifyTokenFile, JSON.stringify({ version: 1, refreshToken: 'RT-router' }))
+    resetAccessTokenCache()
+    statePushes.length = 0
+    registerSpotifyStatePush((state) => statePushes.push(state))
+
+    const routes: Array<[string, { status?: number; body?: unknown }]> = [
+      ['/api/token', { body: { access_token: 'AT-r', expires_in: 3600 } }],
+      [
+        '/v1/search',
+        {
+          body: {
+            tracks: {
+              items: [
+                {
+                  uri: 'spotify:track:cover',
+                  name: 'Bohemian Rhapsody',
+                  artists: [{ name: 'Tribute Band' }],
+                  album: { name: 'Covers' },
+                  popularity: 95
+                },
+                {
+                  uri: 'spotify:track:real',
+                  name: 'Bohemian Rhapsody',
+                  artists: [{ name: 'Queen' }],
+                  album: { name: 'A Night at the Opera' },
+                  popularity: 80
+                }
+              ]
+            }
+          }
+        }
+      ],
+      [
+        '/v1/me/player/devices',
+        { body: { devices: [{ id: 'd1', name: 'Desktop', is_active: true, volume_percent: 50 }] } }
+      ],
+      ['/v1/me/player/play', { status: 204 }],
+      ['/v1/me/player/pause', { status: 204 }],
+      ['/v1/me/player/volume', { status: 204 }],
+      [
+        '/v1/me/player',
+        {
+          body: {
+            is_playing: true,
+            item: { name: 'Bohemian Rhapsody', artists: [{ name: 'Queen' }] },
+            device: { name: 'Desktop', volume_percent: 50 }
+          }
+        }
+      ]
+    ]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url = String(input)
+        for (const [needle, base] of routes) {
+          if (!url.includes(needle)) continue
+          const override = Object.entries(overrides).find(([key]) => url.includes(key))?.[1]
+          const route = override ?? base
+          const status = route.status ?? 200
+          const text = route.body === undefined ? '' : JSON.stringify(route.body)
+          return {
+            ok: status >= 200 && status < 300,
+            status,
+            json: () => Promise.resolve(route.body),
+            text: () => Promise.resolve(text)
+          }
+        }
+        throw new TypeError(`no route for ${url}`)
+      })
+    )
+  }
+
+  const spotifyTokenFile = join(mkdtempSync(join(tmpdir(), 'jarvis-router-sp-')), 'auth.json')
+
+  it('play_music searches, ranks the real artist above the cover, plays, and pushes state', async () => {
+    stubSpotifyApi()
+    const routed = await routeReply(
+      '{"action":"play_music","target":"Bohemian Rhapsody by Queen"}',
+      'play bohemian rhapsody by queen'
+    )
+    expect(routed.text).toBe('Playing Bohemian Rhapsody by Queen on Desktop, sir.')
+    // Now-playing state was pushed to the renderer after the change.
+    expect(statePushes.length).toBeGreaterThan(0)
+    expect((statePushes[0] as { trackName: string }).trackName).toBe('Bohemian Rhapsody')
+  })
+
+  it('reports honestly when no Spotify device exists', async () => {
+    stubSpotifyApi({ '/v1/me/player/devices': { body: { devices: [] } } })
+    const routed = await routeReply(
+      '{"action":"play_music","target":"Bohemian Rhapsody by Queen"}',
+      'play bohemian rhapsody'
+    )
+    expect(routed.text).toContain('open Spotify on your PC or phone first')
+  })
+
+  it('pause and volume-up commands execute and stay truthful', async () => {
+    stubSpotifyApi()
+    const paused = await routeReply('{"action":"pause_music"}', 'pause the music')
+    expect(paused.text).toBe('Paused, sir.')
+
+    const louder = await routeReply('{"action":"music_volume_up"}', 'volume up')
+    expect(louder.text).toBe('Volume at 60 percent, sir.') // 50 + 10
+  })
+
+  it('asks for a fresh login when the refresh token is rejected', async () => {
+    vi.stubEnv('SPOTIFY_AUTH_PORT', '18899')
+    stubSpotifyApi({ '/api/token': { status: 400, body: { error: 'invalid_grant' } } })
+    registerSpotifyOpener(() => Promise.resolve())
+    const routed = await routeReply('{"action":"pause_music"}', 'pause the music')
+    expect(routed.text).toMatch(/authorization in your browser|connect Spotify/i)
+
+    // The reply started a background OAuth flow (temp server on 18899);
+    // cancel it via a bad-state callback so nothing outlives the test.
+    vi.unstubAllGlobals()
+    await new Promise((r) => setTimeout(r, 50))
+    await fetch('http://127.0.0.1:18899/callback?state=cancel').catch(() => {})
+    await new Promise((r) => setTimeout(r, 50))
   })
 })

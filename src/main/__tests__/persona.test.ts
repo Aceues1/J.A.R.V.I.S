@@ -116,7 +116,7 @@ describe('persona system prompt', () => {
 
   it('locks in capability honesty', () => {
     expect(SYSTEM_PROMPT).toMatch(
-      /Beyond the seven supported actions.*cannot yet control the computer/is
+      /Beyond the fourteen supported actions.*cannot yet control the computer/is
     )
     expect(SYSTEM_PROMPT).toMatch(
       /Never state or imply that an action was performed when the application did not perform it/i
@@ -126,7 +126,7 @@ describe('persona system prompt', () => {
   })
 
   it('defines the strict action envelope protocol', () => {
-    expect(SYSTEM_PROMPT).toMatch(/exactly seven actions/i)
+    expect(SYSTEM_PROMPT).toMatch(/exactly fourteen actions/i)
     expect(SYSTEM_PROMPT).toContain('"action":"open_app"')
     expect(SYSTEM_PROMPT).toContain('"action":"open_website"')
     expect(SYSTEM_PROMPT).toContain('"action":"analyze_screen"')
@@ -140,13 +140,24 @@ describe('persona system prompt', () => {
     expect(SYSTEM_PROMPT).toMatch(/closing programs, clicking, typing.*still not possible/is)
   })
 
-  it('keeps play_video distinct from opening YouTube in the browser', () => {
+  it('keeps video, music, and browser actions distinct', () => {
     expect(SYSTEM_PROMPT).toMatch(/"Play\/find a video about X" means play_video/i)
-    expect(SYSTEM_PROMPT).toMatch(/"Open YouTube" means open_website/i)
-    expect(SYSTEM_PROMPT).toMatch(/plays inside this interface/i)
+    expect(SYSTEM_PROMPT).toMatch(/anything Spotify or music means play_music/i)
+    expect(SYSTEM_PROMPT).toMatch(/"Open YouTube\/Spotify" means open_website/i)
+    expect(SYSTEM_PROMPT).toMatch(/whichever playback the user most recently started/i)
     expect(SYSTEM_PROMPT).toMatch(
-      /Bare "pause", "resume", "continue", or "volume 30".*video player/is
+      /"Next", "previous", "skip", "volume up", and "volume down" always refer to Spotify music/i
     )
+  })
+
+  it('defines the Spotify music envelopes', () => {
+    expect(SYSTEM_PROMPT).toContain('"action":"play_music"')
+    expect(SYSTEM_PROMPT).toContain('"action":"pause_music"')
+    expect(SYSTEM_PROMPT).toContain('"action":"resume_music"')
+    expect(SYSTEM_PROMPT).toContain('"action":"next_track"')
+    expect(SYSTEM_PROMPT).toContain('"action":"previous_track"')
+    expect(SYSTEM_PROMPT).toContain('"action":"music_volume_up"')
+    expect(SYSTEM_PROMPT).toContain('"action":"music_volume_down"')
   })
 
   it('grants awareness data with honesty and read-only rules', () => {

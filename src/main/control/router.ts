@@ -4,6 +4,14 @@ import { openWebsite, resolveWebsite } from './websites'
 import { analyzeScreens, type ScreenImage } from '../vision'
 import { GroqConfigError, GroqRequestError } from '../groq'
 import { YouTubeError, searchYouTube } from '../youtube'
+import {
+  executeNextTrack,
+  executePauseMusic,
+  executePlayMusic,
+  executePreviousTrack,
+  executeResumeMusic,
+  executeVolumeStep
+} from '../spotify'
 
 // Playback happens in the renderer's embedded player; the router attaches a
 // directive to the chat result and the renderer executes it. The directive
@@ -156,5 +164,19 @@ export async function routeReply(reply: string, lastUserMessage: string): Promis
       return { text: envelope.say || 'Resuming, sir.', player: { kind: 'play' } }
     case 'set_volume':
       return executeSetVolume(envelope)
+    case 'play_music':
+      return { text: (await executePlayMusic(envelope.target ?? '', envelope.say)).message }
+    case 'pause_music':
+      return { text: (await executePauseMusic(envelope.say)).message }
+    case 'resume_music':
+      return { text: (await executeResumeMusic(envelope.say)).message }
+    case 'next_track':
+      return { text: (await executeNextTrack(envelope.say)).message }
+    case 'previous_track':
+      return { text: (await executePreviousTrack(envelope.say)).message }
+    case 'music_volume_up':
+      return { text: (await executeVolumeStep(1)).message }
+    case 'music_volume_down':
+      return { text: (await executeVolumeStep(-1)).message }
   }
 }

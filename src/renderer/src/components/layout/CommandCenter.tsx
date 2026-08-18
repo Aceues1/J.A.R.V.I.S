@@ -5,6 +5,7 @@ import { TelemetryGrid } from '@renderer/components/telemetry/TelemetryGrid'
 import { DiagnosticsLog } from '@renderer/components/telemetry/DiagnosticsLog'
 import { ConversationPanel } from '@renderer/components/chat/ConversationPanel'
 import { VideoPlayerPanel } from '@renderer/components/media/VideoPlayerPanel'
+import { NowPlayingBar, type NowPlayingState } from '@renderer/components/media/NowPlayingBar'
 import type { PlayerStatus } from '@renderer/hooks/useYouTubePlayer'
 import { cn } from '@renderer/lib/cn'
 
@@ -22,6 +23,7 @@ interface CommandCenterProps {
   playerIframeRef: React.RefObject<HTMLIFrameElement | null>
   onPlayerIframeLoad: () => void
   onPlayerClose: () => void
+  nowPlaying: NowPlayingState | null
 }
 
 const statusReadout: Record<StatusLevel, string> = {
@@ -46,7 +48,8 @@ export function CommandCenter({
   playerEmbedUrl,
   playerIframeRef,
   onPlayerIframeLoad,
-  onPlayerClose
+  onPlayerClose,
+  nowPlaying
 }: CommandCenterProps): React.JSX.Element {
   // Once an exchange starts, the core yields center stage to the transcript.
   const hasConversation = messages.length > 0 || isLoading || chatError !== null
@@ -88,6 +91,8 @@ export function CommandCenter({
           JARVIS
         </p>
       </div>
+
+      <NowPlayingBar state={nowPlaying} />
 
       <VideoPlayerPanel
         status={playerStatus}

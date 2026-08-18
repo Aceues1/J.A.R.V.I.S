@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import type { StatusLevel } from '@renderer/types/hud'
+import type { NowPlayingState } from '@renderer/components/media/NowPlayingBar'
 import { useSimulatedTelemetry } from '@renderer/hooks/useSimulatedTelemetry'
 import { useJarvisChat, type ChatEvent } from '@renderer/hooks/useJarvisChat'
 import { useVoiceInput, type VoiceEvent } from '@renderer/hooks/useVoiceInput'
@@ -63,6 +64,10 @@ export function AppShell(): React.JSX.Element {
 
   const player = useYouTubePlayer(handlePlayerEvent)
   const { handleDirective: handlePlayerDirective } = player
+
+  // Live Spotify now-playing state pushed from the main process.
+  const [nowPlaying, setNowPlaying] = useState<NowPlayingState | null>(null)
+  useEffect(() => window.jarvis.spotify.onState(setNowPlaying), [])
 
   const { messages, isLoading, error, sendMessage, addAssistantMessage, retry } = useJarvisChat(
     handleChatEvent,
@@ -258,6 +263,7 @@ export function AppShell(): React.JSX.Element {
           playerIframeRef={player.iframeRef}
           onPlayerIframeLoad={player.handleIframeLoad}
           onPlayerClose={player.close}
+          nowPlaying={nowPlaying}
         />
         <RightPanel events={eventItems} notes={noteItems} quotes={marketQuotes} />
       </div>

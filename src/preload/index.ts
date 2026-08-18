@@ -129,12 +129,33 @@ const weather = {
   get: (): Promise<WeatherResult> => ipcRenderer.invoke('weather:get')
 }
 
+export interface SpotifyPlaybackState {
+  isPlaying: boolean
+  trackName: string | null
+  artists: string[]
+  deviceName: string | null
+  volumePercent: number | null
+}
+
+const spotify = {
+  /** Live playback-state pushes from the main process (null = nothing playing). */
+  onState: (callback: (state: SpotifyPlaybackState | null) => void): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      state: SpotifyPlaybackState | null
+    ): void => callback(state)
+    ipcRenderer.on('spotify:state', listener)
+    return () => ipcRenderer.removeListener('spotify:state', listener)
+  }
+}
+
 const jarvisApi = {
   window: windowControls,
   system,
   chat,
   voice,
-  weather
+  weather,
+  spotify
 }
 
 export type JarvisApi = typeof jarvisApi

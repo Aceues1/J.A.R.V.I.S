@@ -23,6 +23,7 @@ import { serveRendererDirectory } from './renderer-server'
 import { getLiveSearchContext } from './webSearch'
 import { runWebSearchSelfTest, selfTestEnabled } from './webSearch/debug'
 import { getMemoryTurnContext, registerMemoryDir, runBackgroundExtraction } from './memory'
+import { registerSpotifyDir, registerSpotifyOpener, registerSpotifyStatePush } from './spotify'
 
 // Captures every monitor as a labelled JPEG data URL. desktopCapturer reads
 // the displays themselves, so this works while the JARVIS window is
@@ -104,6 +105,18 @@ app.whenReady().then(() => {
   // PRO 4: persistent memory lives in userData/jarvis-memory.json —
   // local, private, survives restarts.
   registerMemoryDir(app.getPath('userData'))
+
+  // PRO 5: Spotify — refresh token in userData (never the access token),
+  // OAuth pages open via the default browser, and playback state is pushed
+  // to every window so the now-playing display stays live. Credentials stay
+  // in this process; the renderer only ever sees track/artist/state info.
+  registerSpotifyDir(app.getPath('userData'))
+  registerSpotifyOpener((url) => shell.openExternal(url))
+  registerSpotifyStatePush((state) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send('spotify:state', state)
+    }
+  })
 
   // Optional per-source web-search self-test (JARVIS_WEBSEARCH_DEBUG=1):
   // exercises each live source from the main process and prints PASS/FAIL to

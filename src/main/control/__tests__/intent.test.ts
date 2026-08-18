@@ -35,7 +35,28 @@ describe('canonIntent', () => {
     ['unpause', 'resume_video'],
     ['set_volume', 'set_volume'],
     ['volume', 'set_volume'],
-    ['change volume', 'set_volume']
+    ['change volume', 'set_volume'],
+    ['play_music', 'play_music'],
+    ['play a song', 'play_music'],
+    ['play on spotify', 'play_music'],
+    ['spotify', 'play_music'],
+    ['pause_music', 'pause_music'],
+    ['pause the music', 'pause_music'],
+    ['resume_music', 'resume_music'],
+    ['resume the music', 'resume_music'],
+    ['next_track', 'next_track'],
+    ['next', 'next_track'],
+    ['skip', 'next_track'],
+    ['next song', 'next_track'],
+    ['previous_track', 'previous_track'],
+    ['previous', 'previous_track'],
+    ['last song', 'previous_track'],
+    ['music_volume_up', 'music_volume_up'],
+    ['volume up', 'music_volume_up'],
+    ['louder', 'music_volume_up'],
+    ['music_volume_down', 'music_volume_down'],
+    ['volume down', 'music_volume_down'],
+    ['quieter', 'music_volume_down']
   ])('normalizes %j to %s', (input, expected) => {
     expect(canonIntent(input)).toBe(expected)
   })
