@@ -72,6 +72,9 @@ function TitleBarButton({
   onClick: () => void
   variant?: 'default' | 'danger'
 }): React.JSX.Element {
+  // no-drag sits on the button itself, not only the wrapper: Windows'
+  // frameless drag-region hit test does not reliably honor a wrapper-level
+  // no-drag for clicks on child elements.
   return (
     <button
       type="button"
@@ -79,8 +82,8 @@ function TitleBarButton({
       onClick={onClick}
       className={
         variant === 'danger'
-          ? 'flex h-6 w-8 items-center justify-center text-ink-dim transition-colors hover:bg-alert/20 hover:text-alert'
-          : 'flex h-6 w-8 items-center justify-center text-ink-dim transition-colors hover:bg-cyan/10 hover:text-cyan'
+          ? 'no-drag flex h-6 w-8 items-center justify-center text-ink-dim transition-colors hover:bg-alert/20 hover:text-alert'
+          : 'no-drag flex h-6 w-8 items-center justify-center text-ink-dim transition-colors hover:bg-cyan/10 hover:text-cyan'
       }
     >
       {children}
