@@ -11,7 +11,7 @@ function createMessage(role: ChatMessage['role'], content: string): ChatMessage 
 }
 
 export interface ChatEvent {
-  kind: 'sent' | 'received' | 'failed' | 'searched'
+  kind: 'sent' | 'received' | 'failed' | 'searched' | 'memory'
   detail: string
 }
 
@@ -68,6 +68,9 @@ export function useJarvisChat(
               ? `Web search: ${result.search.source} — "${result.search.query}"`
               : `Web search failed — "${result.search.query}"`
           })
+        }
+        if (result.memory) {
+          onEventRef.current?.({ kind: 'memory', detail: `Memory: ${result.memory}` })
         }
         onEventRef.current?.({
           kind: 'received',

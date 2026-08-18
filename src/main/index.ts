@@ -22,6 +22,7 @@ import { MAX_SCREENS, type ScreenImage } from './vision'
 import { serveRendererDirectory } from './renderer-server'
 import { getLiveSearchContext } from './webSearch'
 import { runWebSearchSelfTest, selfTestEnabled } from './webSearch/debug'
+import { getMemoryTurnContext, registerMemoryDir, runBackgroundExtraction } from './memory'
 
 // Captures every monitor as a labelled JPEG data URL. desktopCapturer reads
 // the displays themselves, so this works while the JARVIS window is
@@ -100,6 +101,9 @@ app.whenReady().then(() => {
   registerAppsDir(app.getPath('userData'))
   registerExternalOpener((url) => shell.openExternal(url))
   registerScreenCapturer(captureAllScreens)
+  // PRO 4: persistent memory lives in userData/jarvis-memory.json —
+  // local, private, survives restarts.
+  registerMemoryDir(app.getPath('userData'))
 
   // Optional per-source web-search self-test (JARVIS_WEBSEARCH_DEBUG=1):
   // exercises each live source from the main process and prints PASS/FAIL to
@@ -162,23 +166,33 @@ app.whenReady().then(() => {
     }
 
     try {
+      // PRO 4: persistent memory context — relevant memories each turn, and
+      // explicit remember/forget commands executed BEFORE the reply so
+      // confirmations are honest. Never throws; memory can't break chat.
+      const memoryContext = await getMemoryTurnContext(history)
       // PRO 3: gate + layered live web search. Returns null when no live
       // data is needed; an honest failure block when sources fail; and
       // never throws — chat survives any search problem.
       const searchContext = await getLiveSearchContext(history)
-      const reply = await requestGroqReply(history, searchContext?.block)
+      const extraContext =
+        [memoryContext?.block, searchContext?.block].filter(Boolean).join('\n\n') || undefined
+      const reply = await requestGroqReply(history, extraContext)
       // Action envelopes (open app/website, analyze screen, video playback)
       // are executed here; plain replies pass straight through. Player
       // directives ride along for the renderer's embedded player.
       const lastUser = [...history].reverse().find((turn) => turn.role === 'user')?.content ?? ''
       const routed = await routeReply(reply, lastUser)
+      // Implicit durable info is extracted in the background AFTER the
+      // reply — fire-and-forget, so responses stay fast.
+      void runBackgroundExtraction(history)
       return {
         ok: true as const,
         message: routed.text,
         player: routed.player,
         search: searchContext
           ? { source: searchContext.source, query: searchContext.query, ok: searchContext.ok }
-          : undefined
+          : undefined,
+        memory: memoryContext?.note
       }
     } catch (error) {
       if (error instanceof GroqConfigError || error instanceof GroqRequestError) {

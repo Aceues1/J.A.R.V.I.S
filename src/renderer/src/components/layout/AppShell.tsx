@@ -20,7 +20,8 @@ const chatEventLevel: Record<ChatEvent['kind'], 'info' | 'ok' | 'warn'> = {
   sent: 'info',
   received: 'ok',
   failed: 'warn',
-  searched: 'info'
+  searched: 'info',
+  memory: 'info'
 }
 
 const voiceEventLevel: Record<VoiceEvent['kind'], 'info' | 'ok' | 'warn'> = {

@@ -64,7 +64,14 @@ export interface SearchInfo {
 }
 
 export type ChatSendResult =
-  | { ok: true; message: string; player?: PlayerDirective; search?: SearchInfo }
+  | {
+      ok: true
+      message: string
+      player?: PlayerDirective
+      search?: SearchInfo
+      /** Short note when a memory action happened this turn (e.g. "Stored …"). */
+      memory?: string
+    }
   | { ok: false; error: string }
 
 export interface ChatBackendStatus {
