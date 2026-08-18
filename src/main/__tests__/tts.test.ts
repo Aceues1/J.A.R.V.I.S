@@ -8,6 +8,7 @@ import {
   synthesizeSpeech,
   validateSpeakPayload
 } from '../tts'
+import { resetGroqTtsModelCache } from '../tts/groq-playai'
 
 function mockFetchAudio(
   status: number,
@@ -190,6 +191,7 @@ describe('synthesizeSpeech via Groq PlayAI', () => {
   beforeEach(() => {
     vi.stubEnv('ELEVENLABS_API_KEY', '')
     vi.stubEnv('GROQ_API_KEY', 'groq-test-key')
+    resetGroqTtsModelCache()
   })
 
   it('posts model, voice and input to the audio/speech endpoint', async () => {
@@ -225,5 +227,113 @@ describe('synthesizeSpeech via Groq PlayAI', () => {
     vi.stubGlobal('fetch', fetchSpy)
     await expect(synthesizeSpeech('Hi')).rejects.toBeInstanceOf(TtsConfigError)
     expect(fetchSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('Groq TTS model self-healing (playai-tts decommissioned)', () => {
+  const DEAD =
+    '{"error":{"message":"The model `playai-tts` has been decommissioned and is no longer supported."}}'
+
+  function stubGroq(behaviors: Record<string, { status: number; body?: string }>): string[] {
+    const urls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown, init: { body?: string } = {}) => {
+        const url = String(input)
+        urls.push(url)
+        if (url.endsWith('/models')) {
+          return {
+            ok: true,
+            status: 200,
+            json: () =>
+              Promise.resolve({
+                data: [
+                  { id: 'openai/gpt-oss-120b' },
+                  { id: 'whisper-large-v3-turbo' },
+                  { id: 'new-groq-tts-model' }
+                ]
+              })
+          }
+        }
+        const model = init.body ? (JSON.parse(init.body).model as string) : ''
+        const behavior = behaviors[model] ?? { status: 200 }
+        return {
+          ok: behavior.status >= 200 && behavior.status < 300,
+          status: behavior.status,
+          text: () => Promise.resolve(behavior.body ?? ''),
+          arrayBuffer: () => Promise.resolve(new Uint8Array([1, 2, 3]).slice().buffer)
+        }
+      })
+    )
+    return urls
+  }
+
+  beforeEach(() => {
+    vi.stubEnv('ELEVENLABS_API_KEY', '')
+    vi.stubEnv('GROQ_API_KEY', 'groq-test-key')
+    resetGroqTtsModelCache()
+  })
+
+  it('recovers from a decommissioned model by discovering a live TTS model', async () => {
+    const urls = stubGroq({ 'playai-tts': { status: 400, body: DEAD } })
+    const result = await synthesizeSpeech('Hello.')
+    expect(result.mimeType).toBe('audio/mpeg')
+    // dead attempt → /models discovery → working model
+    expect(urls.some((u) => u.endsWith('/models'))).toBe(true)
+
+    // Subsequent calls go straight to the discovered model: no discovery, no
+    // dead-model retry.
+    urls.length = 0
+    await synthesizeSpeech('Again.')
+    expect(urls).toHaveLength(1)
+    expect(urls[0]).toContain('/audio/speech')
+  })
+
+  it('skips STT models (whisper) during discovery and omits the PlayAI voice for non-PlayAI models', async () => {
+    const fetchMock = stubGroq({ 'playai-tts': { status: 400, body: DEAD } })
+    await synthesizeSpeech('Hello.')
+    void fetchMock
+    const speechCalls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter((call) =>
+      String(call[0]).includes('/audio/speech')
+    )
+    const lastBody = JSON.parse(speechCalls[speechCalls.length - 1][1].body)
+    expect(lastBody.model).toBe('new-groq-tts-model')
+    expect(lastBody.model).not.toContain('whisper')
+    expect('voice' in lastBody).toBe(false) // Basil-PlayAI only fits PlayAI models
+  })
+
+  it('degrades to a clear config error when NO TTS model exists — chat stays alive', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url = String(input)
+        if (url.endsWith('/models')) {
+          return {
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ data: [{ id: 'openai/gpt-oss-120b' }] })
+          }
+        }
+        return { ok: false, status: 400, text: () => Promise.resolve(DEAD) }
+      })
+    )
+    await expect(synthesizeSpeech('Hello.')).rejects.toThrow(/GROQ_TTS_MODEL|text-only/i)
+    await expect(synthesizeSpeech('Hello.')).rejects.toBeInstanceOf(TtsConfigError)
+  })
+
+  it('tries a pinned GROQ_TTS_MODEL first and honors GROQ_TTS_VOICE with it', async () => {
+    vi.stubEnv('GROQ_TTS_MODEL', 'pinned-tts')
+    vi.stubEnv('GROQ_TTS_VOICE', 'CustomVoice')
+    stubGroq({})
+    await synthesizeSpeech('Hello.')
+    const [, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    const body = JSON.parse(init.body)
+    expect(body.model).toBe('pinned-tts')
+    expect(body.voice).toBe('CustomVoice')
+  })
+
+  it('maps a voice rejection to a config error naming GROQ_TTS_VOICE', async () => {
+    stubGroq({ 'playai-tts': { status: 400, body: '{"error":"voice not valid for model"}' } })
+    await expect(synthesizeSpeech('Hello.')).rejects.toThrow(/GROQ_TTS_VOICE/)
   })
 })

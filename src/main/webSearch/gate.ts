@@ -55,7 +55,8 @@ NOT needed for: greetings and small talk; opinions, advice, jokes; math, coding,
 Reply with ONLY one single-line JSON object, nothing else:
 {"search":true,"query":"<standalone web search query — resolve pronouns like it/them/that from the conversation>"}
 or
-{"search":false}`
+{"search":false}
+You have NO tools or functions available — never emit a tool or function call; write the JSON object as plain text.`
 
 function parseGateReply(reply: string): GateDecision | null {
   const trimmed = reply.trim()
@@ -97,7 +98,9 @@ export async function runSearchGate(history: ChatTurn[]): Promise<GateDecision> 
     return { search: false }
   }
   const baseUrl = process.env.GROQ_BASE_URL || DEFAULT_BASE_URL
-  const model = process.env.GROQ_GATE_MODEL || DEFAULT_GATE_MODEL
+  // After repeated 4xx rejections of the configured gate model, the session
+  // switches to the proven fallback directly — one call per turn, not two.
+  const model = stickyGateModel ?? (process.env.GROQ_GATE_MODEL || DEFAULT_GATE_MODEL)
 
   const recent = history
     .slice(-GATE_HISTORY_TURNS)
@@ -122,6 +125,20 @@ interface GateChoice {
   message?: { content?: unknown; reasoning?: unknown }
 }
 
+// Sticky model fallback: when the primary gate model keeps getting rejected
+// with 4xx (e.g. gpt-oss phantom tool-calls: "Tool choice is none, but model
+// called a tool"), stop paying a failed call + retry on every turn and use
+// the fallback model directly for the rest of the session.
+const STICKY_AFTER_FAILURES = 2
+let primaryGateFailures = 0
+let stickyGateModel: string | null = null
+
+/** Test hook: forget sticky gate-model state. */
+export function resetGateModelStickiness(): void {
+  primaryGateFailures = 0
+  stickyGateModel = null
+}
+
 /**
  * One gate request. Returns null when the call produced no usable decision.
  * If the gate model itself is rejected (HTTP 4xx — decommissioned model or
@@ -143,8 +160,12 @@ async function callGateModel(
   }
   // Keep the reasoning channel short on reasoning models — the gate's answer
   // is one line of JSON; long deliberation is wasted latency and tokens.
+  // json_object mode pins the output to the JSON channel, which also stops
+  // gpt-oss from emitting phantom built-in tool calls ("Tool choice is none,
+  // but model called a tool").
   if (model.includes('gpt-oss')) {
     body.reasoning_effort = 'low'
+    body.response_format = { type: 'json_object' }
   }
 
   try {
@@ -161,14 +182,24 @@ async function callGateModel(
       const errorText = await response.text().catch(() => '')
       console.error(`[websearch:gate] HTTP ${response.status}: ${errorText.slice(0, 200)}`)
       // 4xx = this model/parameter combination is rejected — retry once with
-      // the main chat model before giving up.
+      // the main chat model before giving up. Repeated rejections make the
+      // fallback sticky so future turns cost a single call again.
       const fallback = FALLBACK_GATE_MODEL()
       if (allowModelFallback && response.status < 500 && model !== fallback) {
+        primaryGateFailures += 1
+        if (primaryGateFailures >= STICKY_AFTER_FAILURES && !stickyGateModel) {
+          stickyGateModel = fallback
+          console.error(
+            `[websearch:gate] gate model rejected ${primaryGateFailures}x — ` +
+              `using ${fallback} directly for the rest of this session`
+          )
+        }
         console.error(`[websearch:gate] retrying with main chat model ${fallback}`)
         return callGateModel(baseUrl, apiKey, fallback, recent, false)
       }
       return null
     }
+    if (allowModelFallback) primaryGateFailures = 0
     const data = (await response.json()) as { choices?: GateChoice[] }
     const choice = data?.choices?.[0]
     const content = typeof choice?.message?.content === 'string' ? choice.message.content : ''

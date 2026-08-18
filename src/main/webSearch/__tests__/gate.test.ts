@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { GATE_SYSTEM_PROMPT, isTrivialMessage, runSearchGate } from '../gate'
+import {
+  GATE_SYSTEM_PROMPT,
+  isTrivialMessage,
+  resetGateModelStickiness,
+  runSearchGate
+} from '../gate'
 import type { ChatTurn } from '../../chat-validation'
 
 function gateReply(content: string): ReturnType<typeof vi.fn> {
@@ -17,6 +22,7 @@ const assistant = (content: string): ChatTurn => ({ role: 'assistant', content }
 
 beforeEach(() => {
   vi.stubEnv('GROQ_API_KEY', 'test-key')
+  resetGateModelStickiness()
 })
 
 afterEach(() => {
@@ -147,12 +153,59 @@ describe('runSearchGate', () => {
     expect(body.reasoning_effort).toBe('low')
   })
 
-  it('omits reasoning_effort for non-gpt-oss override models', async () => {
+  // REGRESSION (Windows PRO 5 report): gpt-oss models emit phantom built-in
+  // tool calls ("Tool choice is none, but model called a tool"). json_object
+  // mode pins output to the JSON channel, and the prompt forbids tool calls.
+  it('forces json_object output and forbids tool calls for gpt-oss gate models', async () => {
+    const fetchMock = gateReply('{"search":false}')
+    await runSearchGate([user('latest AI news?')])
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body.response_format).toEqual({ type: 'json_object' })
+    expect(GATE_SYSTEM_PROMPT).toMatch(/never emit a tool or function call/i)
+  })
+
+  it('omits reasoning_effort and response_format for non-gpt-oss override models', async () => {
     vi.stubEnv('GROQ_GATE_MODEL', 'llama-x-8b')
     const fetchMock = gateReply('{"search":false}')
     await runSearchGate([user('latest AI news?')])
     const body = JSON.parse(fetchMock.mock.calls[0][1].body)
     expect('reasoning_effort' in body).toBe(false)
+    expect('response_format' in body).toBe(false)
+  })
+
+  it('makes the fallback model sticky after repeated 4xx — one call per turn again', async () => {
+    vi.stubEnv('GROQ_MODEL', 'main-chat-model')
+    const fetchMock = vi.fn(async (_url: unknown, init: { body?: string } = {}) => {
+      const model = init.body ? (JSON.parse(init.body).model as string) : ''
+      if (model === 'main-chat-model') {
+        return {
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              choices: [{ message: { content: '{"search":true,"query":"latest AI news"}' } }]
+            })
+        }
+      }
+      return {
+        ok: false,
+        status: 400,
+        text: () => Promise.resolve('Tool choice is none, but model called a tool'),
+        json: () => Promise.resolve({})
+      }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    // Turns 1 and 2: primary fails, fallback succeeds (2 calls each).
+    await runSearchGate([user('latest AI news?')])
+    await runSearchGate([user('latest AI news?')])
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+
+    // Turn 3+: sticky — the fallback is called directly (1 call per turn).
+    const decision = await runSearchGate([user('latest AI news?')])
+    expect(decision).toEqual({ search: true, query: 'latest AI news' })
+    expect(fetchMock).toHaveBeenCalledTimes(5)
+    expect(JSON.parse(fetchMock.mock.calls[4][1]!.body!).model).toBe('main-chat-model')
   })
 
   it('recovers the decision from message.reasoning when content is empty', async () => {

@@ -54,7 +54,8 @@ NOT worth storing: questions, small talk, thanks, one-off requests (weather, pri
 If the latest message contradicts or refines an existing memory, UPDATE that memory's id instead of adding a duplicate — newer explicit statements supersede older conflicting ones. DELETE a memory only when the user asks to forget it. Never touch memories unrelated to the latest message.
 Reply with ONLY one single-line JSON object, nothing else:
 {"ops":[{"op":"add","type":"preference|fact|project|decision","content":"concise third-person statement"},{"op":"update","id":"<existing id>","content":"..."},{"op":"delete","id":"<existing id>"}]}
-Use {"ops":[]} when nothing should change. At most ${MAX_OPS_PER_TURN} ops.`
+Use {"ops":[]} when nothing should change. At most ${MAX_OPS_PER_TURN} ops.
+You have NO tools or functions available — never emit a tool or function call; write the JSON object as plain text.`
 
 export function parseCuratorReply(reply: string, existing: MemoryEntry[]): MemoryOp[] {
   const trimmed = reply.trim()
@@ -110,7 +111,19 @@ export async function requestMemoryOps(
   }
   const baseUrl = process.env.GROQ_BASE_URL || DEFAULT_BASE_URL
   const model = process.env.GROQ_MEMORY_MODEL || DEFAULT_MEMORY_MODEL
+  return callCurator(baseUrl, apiKey, model, history, existing, true)
+}
 
+const FALLBACK_CURATOR_MODEL = (): string => process.env.GROQ_MODEL || 'openai/gpt-oss-120b'
+
+async function callCurator(
+  baseUrl: string,
+  apiKey: string,
+  model: string,
+  history: ChatTurn[],
+  existing: MemoryEntry[],
+  allowModelFallback: boolean
+): Promise<MemoryOp[] | null> {
   const existingBlock =
     existing.length > 0
       ? `Existing memories:\n${existing
@@ -132,8 +145,12 @@ export async function requestMemoryOps(
     temperature: 0,
     max_tokens: EXTRACT_MAX_TOKENS
   }
+  // json_object mode pins gpt-oss to the JSON channel — it also prevents the
+  // phantom built-in tool-call 400 ("Tool choice is none, but model called a
+  // tool") those models can produce.
   if (model.includes('gpt-oss')) {
     body.reasoning_effort = 'low'
+    body.response_format = { type: 'json_object' }
   }
 
   try {
@@ -144,7 +161,15 @@ export async function requestMemoryOps(
       signal: AbortSignal.timeout(EXTRACT_TIMEOUT_MS)
     })
     if (!response.ok) {
-      console.error('[memory:extract] HTTP', response.status)
+      const errorText = await response.text().catch(() => '')
+      console.error('[memory:extract] HTTP', response.status, errorText.slice(0, 200))
+      // 4xx = this model/parameter combination is rejected — one retry with
+      // the main chat model, mirroring the search gate.
+      const fallback = FALLBACK_CURATOR_MODEL()
+      if (allowModelFallback && response.status < 500 && model !== fallback) {
+        console.error(`[memory:extract] retrying with main chat model ${fallback}`)
+        return callCurator(baseUrl, apiKey, fallback, history, existing, false)
+      }
       return null
     }
     const data = (await response.json()) as {

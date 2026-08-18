@@ -148,6 +148,44 @@ describe('requestMemoryOps', () => {
     )
     expect(body.max_tokens).toBeGreaterThanOrEqual(512) // the PRO 3 gate lesson
     expect(body.reasoning_effort).toBe('low')
+    // gpt-oss phantom tool-call guard (the PRO 5 Windows report)
+    expect(body.response_format).toEqual({ type: 'json_object' })
+    expect(CURATOR_SYSTEM_PROMPT).toMatch(/never emit a tool or function call/i)
+  })
+
+  it('retries once with the main chat model when the curator model is rejected (4xx)', async () => {
+    vi.stubEnv('GROQ_MODEL', 'main-chat-model')
+    const fetchMock = vi.fn(async (_url: unknown, init: { body?: string } = {}) => {
+      const model = init.body ? (JSON.parse(init.body).model as string) : ''
+      if (model === 'main-chat-model') {
+        return {
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              choices: [
+                {
+                  message: {
+                    content: '{"ops":[{"op":"add","type":"fact","content":"User lives in Norway"}]}'
+                  }
+                }
+              ]
+            })
+        }
+      }
+      return {
+        ok: false,
+        status: 400,
+        text: () => Promise.resolve('Tool choice is none, but model called a tool'),
+        json: () => Promise.resolve({})
+      }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      requestMemoryOps([{ role: 'user', content: 'Remember that I live in Norway' }], [])
+    ).resolves.toEqual([{ op: 'add', type: 'fact', content: 'User lives in Norway' }])
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
   it('returns null (not []) on extraction failure so callers can be honest', async () => {
