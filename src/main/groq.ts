@@ -29,7 +29,10 @@ export function getApiKey(): string {
   return apiKey
 }
 
-export async function requestGroqReply(history: ChatTurn[]): Promise<string> {
+export async function requestGroqReply(
+  history: ChatTurn[],
+  extraContext?: string
+): Promise<string> {
   const apiKey = getApiKey()
   const baseUrl = process.env.GROQ_BASE_URL || DEFAULT_BASE_URL
   const model = process.env.GROQ_MODEL || DEFAULT_MODEL
@@ -37,6 +40,8 @@ export async function requestGroqReply(history: ChatTurn[]): Promise<string> {
   // weather) — cheap: local reads plus the cached weather feed, with the
   // weather fetch capped so a cold/slow fetch never stalls the chat.
   const weatherContext = await getAwarenessContext()
+  // Optional per-turn context (live web search results) rides after awareness.
+  const systemContent = [SYSTEM_PROMPT, weatherContext, extraContext].filter(Boolean).join('\n\n')
 
   let response: Response
   try {
@@ -48,10 +53,7 @@ export async function requestGroqReply(history: ChatTurn[]): Promise<string> {
       },
       body: JSON.stringify({
         model,
-        messages: [
-          { role: 'system', content: `${SYSTEM_PROMPT}\n\n${weatherContext}` },
-          ...history
-        ],
+        messages: [{ role: 'system', content: systemContent }, ...history],
         temperature: 0.6,
         max_tokens: 1024
       }),

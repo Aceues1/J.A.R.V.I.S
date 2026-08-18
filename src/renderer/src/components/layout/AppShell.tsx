@@ -19,7 +19,8 @@ import { CommandBar } from './CommandBar'
 const chatEventLevel: Record<ChatEvent['kind'], 'info' | 'ok' | 'warn'> = {
   sent: 'info',
   received: 'ok',
-  failed: 'warn'
+  failed: 'warn',
+  searched: 'info'
 }
 
 const voiceEventLevel: Record<VoiceEvent['kind'], 'info' | 'ok' | 'warn'> = {

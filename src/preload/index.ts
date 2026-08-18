@@ -56,8 +56,16 @@ export type PlayerDirective =
   | { kind: 'play' }
   | { kind: 'volume'; value: number }
 
+export interface SearchInfo {
+  source: string
+  query: string
+  /** False when a search was attempted but every source failed. */
+  ok: boolean
+}
+
 export type ChatSendResult =
-  { ok: true; message: string; player?: PlayerDirective } | { ok: false; error: string }
+  | { ok: true; message: string; player?: PlayerDirective; search?: SearchInfo }
+  | { ok: false; error: string }
 
 export interface ChatBackendStatus {
   configured: boolean

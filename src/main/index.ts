@@ -20,6 +20,7 @@ import { registerExternalOpener } from './control/websites'
 import { registerScreenCapturer, routeReply } from './control/router'
 import { MAX_SCREENS, type ScreenImage } from './vision'
 import { serveRendererDirectory } from './renderer-server'
+import { getLiveSearchContext } from './webSearch'
 
 // Captures every monitor as a labelled JPEG data URL. desktopCapturer reads
 // the displays themselves, so this works while the JARVIS window is
@@ -153,13 +154,24 @@ app.whenReady().then(() => {
     }
 
     try {
-      const reply = await requestGroqReply(history)
+      // PRO 3: gate + layered live web search. Returns null when no live
+      // data is needed; an honest failure block when sources fail; and
+      // never throws — chat survives any search problem.
+      const searchContext = await getLiveSearchContext(history)
+      const reply = await requestGroqReply(history, searchContext?.block)
       // Action envelopes (open app/website, analyze screen, video playback)
       // are executed here; plain replies pass straight through. Player
       // directives ride along for the renderer's embedded player.
       const lastUser = [...history].reverse().find((turn) => turn.role === 'user')?.content ?? ''
       const routed = await routeReply(reply, lastUser)
-      return { ok: true as const, message: routed.text, player: routed.player }
+      return {
+        ok: true as const,
+        message: routed.text,
+        player: routed.player,
+        search: searchContext
+          ? { source: searchContext.source, query: searchContext.query, ok: searchContext.ok }
+          : undefined
+      }
     } catch (error) {
       if (error instanceof GroqConfigError || error instanceof GroqRequestError) {
         return { ok: false as const, error: error.message }

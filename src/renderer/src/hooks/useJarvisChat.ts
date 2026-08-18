@@ -11,7 +11,7 @@ function createMessage(role: ChatMessage['role'], content: string): ChatMessage 
 }
 
 export interface ChatEvent {
-  kind: 'sent' | 'received' | 'failed'
+  kind: 'sent' | 'received' | 'failed' | 'searched'
   detail: string
 }
 
@@ -59,6 +59,16 @@ export function useJarvisChat(
         const reply = createMessage('assistant', result.message)
         messagesRef.current = [...messagesRef.current, reply]
         setMessages(messagesRef.current)
+        // Surface live web searches in the diagnostics feed — the user can
+        // see when an answer is grounded in a real search (and via what).
+        if (result.search) {
+          onEventRef.current?.({
+            kind: 'searched',
+            detail: result.search.ok
+              ? `Web search: ${result.search.source} — "${result.search.query}"`
+              : `Web search failed — "${result.search.query}"`
+          })
+        }
         onEventRef.current?.({
           kind: 'received',
           detail: `Response received in ${((performance.now() - startedAt) / 1000).toFixed(1)}s`
