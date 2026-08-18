@@ -60,9 +60,16 @@ function decodeEntitiesInHref(href: string): string {
  * empty when the page has no parseable results); throws WebSearchError on
  * network/timeout/HTTP failures so the coordinator can fall back.
  */
-export async function searchDuckDuckGo(query: string): Promise<SearchResult[]> {
+export async function searchDuckDuckGo(
+  query: string,
+  options: { preferRecent?: boolean } = {}
+): Promise<SearchResult[]> {
   const baseUrl = process.env.DDG_BASE_URL || DEFAULT_BASE_URL
-  const url = `${baseUrl}/html/?q=${encodeURIComponent(query)}`
+  // df=w is DuckDuckGo's past-week date filter — used for news-type queries
+  // so "latest" leans toward recent articles instead of evergreen section
+  // pages. No outlet is hard-coded anywhere.
+  const recency = options.preferRecent ? '&df=w' : ''
+  const url = `${baseUrl}/html/?q=${encodeURIComponent(query)}${recency}`
 
   let response: Response
   try {

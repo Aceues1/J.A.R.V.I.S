@@ -109,6 +109,16 @@ describe('searchDuckDuckGo', () => {
     expect(results).toHaveLength(2)
   })
 
+  it('adds df=w (past week) only when preferRecent is requested', async () => {
+    const fetchMock = mockFetch(200, DDG_HTML)
+    await searchDuckDuckGo('latest AI news', { preferRecent: true })
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      'https://html.duckduckgo.com/html/?q=latest%20AI%20news&df=w'
+    )
+    await searchDuckDuckGo('latest AI news')
+    expect(String(fetchMock.mock.calls[1][0])).not.toContain('df=w')
+  })
+
   it('honors the DDG_BASE_URL override', async () => {
     vi.stubEnv('DDG_BASE_URL', 'http://127.0.0.1:9999')
     const fetchMock = mockFetch(200, DDG_HTML)

@@ -126,6 +126,55 @@ describe('searchWeb — layered fallback', () => {
     expect(hits.tc).toBe(0)
   })
 
+  it('treats category-page-only DDG results as unusable and falls through to TechCrunch', async () => {
+    const categoryHtml =
+      '<a class="result__a" href="https://techcrunch.com/category/artificial-intelligence/">Artificial Intelligence | TechCrunch</a>' +
+      '<a class="result__snippet" href="#">Read the latest AI coverage.</a>' +
+      '<a class="result__a" href="https://www.reuters.com/technology/artificial-intelligence/">Artificial Intelligence</a>' +
+      '<a class="result__snippet" href="#">Reuters AI section.</a>'
+    const hits = stubRoutes({
+      ddg: { match: (u) => u.includes('duckduckgo.com/html'), body: categoryHtml },
+      tc: {
+        match: (u) => u.includes('techcrunch.com/category/artificial-intelligence/feed'),
+        body: RSS_XML
+      }
+    })
+    const { source, results } = await searchWeb('latest AI news')
+    expect(source).toBe('TechCrunch RSS')
+    expect(results[0].title).toBe('AI story')
+    expect(hits.tc).toBe(1)
+  })
+
+  it('adds the past-week recency filter for news queries only', async () => {
+    const hits = stubRoutes({
+      ddg: { match: (u) => u.includes('duckduckgo.com/html'), body: DDG_HTML }
+    })
+    await searchWeb('latest AI news')
+    await searchWeb('anything current')
+    expect(hits.ddg).toBe(2)
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>
+    expect(String(fetchMock.mock.calls[0][0])).toContain('&df=w')
+    expect(String(fetchMock.mock.calls[1][0])).not.toContain('df=w')
+  })
+
+  it('returns category pages honestly labelled when no layer has real articles', async () => {
+    const categoryHtml =
+      '<a class="result__a" href="https://www.example-news.com/topics/football/">Football – Latest</a>' +
+      '<a class="result__snippet" href="#">Football section.</a>'
+    stubRoutes({
+      ddg: { match: (u) => u.includes('duckduckgo.com/html'), body: categoryHtml }
+      // non-AI query: no Brave key, no TechCrunch eligibility
+    })
+    const outcome = await searchWeb('latest football news')
+    expect(outcome.categoryPagesOnly).toBe(true)
+    expect(outcome.results).toHaveLength(1)
+
+    const block = formatResultsBlock('latest football news', outcome.source, outcome.results, true)
+    expect(block).toContain('NOT specific articles')
+    expect(block).toContain('did not surface specific article titles or dates')
+    expect(block).toContain('do NOT fabricate headlines')
+  })
+
   it('throws when every applicable layer fails', async () => {
     vi.stubEnv('BRAVE_SEARCH_API_KEY', 'brave-key')
     stubRoutes({
