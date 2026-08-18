@@ -3,6 +3,21 @@ import { launchApp, resolveApp, type ActionResult } from './apps'
 import { openWebsite, resolveWebsite } from './websites'
 import { analyzeScreens, type ScreenImage } from '../vision'
 import { GroqConfigError, GroqRequestError } from '../groq'
+import { YouTubeError, searchYouTube } from '../youtube'
+
+// Playback happens in the renderer's embedded player; the router attaches a
+// directive to the chat result and the renderer executes it. The directive
+// is only attached when the underlying action truly succeeded.
+export type PlayerDirective =
+  | { kind: 'load'; videoId: string; title?: string }
+  | { kind: 'pause' }
+  | { kind: 'play' }
+  | { kind: 'volume'; value: number }
+
+export interface RoutedReply {
+  text: string
+  player?: PlayerDirective
+}
 
 // Routes a model reply through the action pipeline:
 //   reply → envelope parse → canonical intent → allowlisted executor →
@@ -76,27 +91,70 @@ async function executeAnalyzeScreen(question: string): Promise<string> {
   }
 }
 
+async function executePlayVideo(envelope: ActionEnvelope): Promise<RoutedReply> {
+  try {
+    const video = await searchYouTube(envelope.target ?? '')
+    return {
+      text: envelope.say || 'Found one, sir.',
+      player: { kind: 'load', videoId: video.videoId, title: video.title }
+    }
+  } catch (error) {
+    if (error instanceof YouTubeError) {
+      if (/reached|timed out/i.test(error.message)) {
+        return { text: "I'm unable to reach YouTube at the moment, sir." }
+      }
+      if (/no playable result|no search topic/i.test(error.message)) {
+        return { text: "I couldn't identify a playable result, sir." }
+      }
+      return { text: `I wasn't able to find a suitable video, sir. ${error.message}` }
+    }
+    console.error('[control] video search failed', error)
+    return { text: "I wasn't able to find a suitable video, sir." }
+  }
+}
+
+function executeSetVolume(envelope: ActionEnvelope): RoutedReply {
+  // Accept the numeric envelope field, or a bare number in target.
+  const raw =
+    envelope.volume ??
+    (envelope.target && Number.isFinite(Number(envelope.target)) ? Number(envelope.target) : NaN)
+  if (!Number.isFinite(raw)) {
+    return { text: 'The volume needs to be a number between 0 and 100, sir.' }
+  }
+  const value = Math.max(0, Math.min(100, Math.round(raw)))
+  return { text: envelope.say || `Volume set to ${value}, sir.`, player: { kind: 'volume', value } }
+}
+
 /**
  * Post-processes a model reply. Returns the text to show/speak — either the
  * reply itself (normal conversation) or the truthful outcome of the action
- * it requested. `lastUserMessage` gives screen analysis its question.
+ * it requested — plus an optional player directive for the renderer.
+ * `lastUserMessage` gives screen analysis its question.
  */
-export async function routeReply(reply: string, lastUserMessage: string): Promise<string> {
+export async function routeReply(reply: string, lastUserMessage: string): Promise<RoutedReply> {
   const parsed = parseActionReply(reply)
-  if (!parsed) return reply
+  if (!parsed) return { text: reply }
 
   if ('unsupported' in parsed) {
     console.error('[control] unsupported action requested by model:', parsed.unsupported)
-    return "I'm afraid that action isn't supported yet, sir."
+    return { text: "I'm afraid that action isn't supported yet, sir." }
   }
 
   const { envelope } = parsed
   switch (envelope.action) {
     case 'open_app':
-      return executeOpenApp(envelope)
+      return { text: await executeOpenApp(envelope) }
     case 'open_website':
-      return executeOpenWebsite(envelope)
+      return { text: await executeOpenWebsite(envelope) }
     case 'analyze_screen':
-      return executeAnalyzeScreen(lastUserMessage)
+      return { text: await executeAnalyzeScreen(lastUserMessage) }
+    case 'play_video':
+      return executePlayVideo(envelope)
+    case 'pause_video':
+      return { text: envelope.say || 'Pausing the video, sir.', player: { kind: 'pause' } }
+    case 'resume_video':
+      return { text: envelope.say || 'Resuming, sir.', player: { kind: 'play' } }
+    case 'set_volume':
+      return executeSetVolume(envelope)
   }
 }

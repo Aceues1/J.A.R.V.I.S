@@ -50,7 +50,14 @@ export interface ChatTurn {
   content: string
 }
 
-export type ChatSendResult = { ok: true; message: string } | { ok: false; error: string }
+export type PlayerDirective =
+  | { kind: 'load'; videoId: string; title?: string }
+  | { kind: 'pause' }
+  | { kind: 'play' }
+  | { kind: 'volume'; value: number }
+
+export type ChatSendResult =
+  { ok: true; message: string; player?: PlayerDirective } | { ok: false; error: string }
 
 export interface ChatBackendStatus {
   configured: boolean

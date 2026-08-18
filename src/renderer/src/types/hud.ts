@@ -83,6 +83,12 @@ export interface SystemStatus {
   platform: string
 }
 
+export type PlayerDirective =
+  | { kind: 'load'; videoId: string; title?: string }
+  | { kind: 'pause' }
+  | { kind: 'play' }
+  | { kind: 'volume'; value: number }
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'

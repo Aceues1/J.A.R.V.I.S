@@ -19,6 +19,7 @@ import { registerAppsDir } from './control/apps'
 import { registerExternalOpener } from './control/websites'
 import { registerScreenCapturer, routeReply } from './control/router'
 import { MAX_SCREENS, type ScreenImage } from './vision'
+import { serveRendererDirectory } from './renderer-server'
 
 // Captures every monitor as a labelled JPEG data URL. desktopCapturer reads
 // the displays themselves, so this works while the JARVIS window is
@@ -41,7 +42,7 @@ async function captureAllScreens(): Promise<ScreenImage[]> {
   })
 }
 
-function createWindow(): void {
+async function createWindow(): Promise<void> {
   const mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -77,7 +78,15 @@ function createWindow(): void {
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    // Production serves the renderer from a loopback HTTP origin instead of
+    // file:// — YouTube's embed player rejects file:// origins (Error 153).
+    try {
+      const server = await serveRendererDirectory(join(__dirname, '../renderer'))
+      mainWindow.loadURL(server.url)
+    } catch (error) {
+      console.error('[main] loopback renderer server failed; falling back to file://', error)
+      mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    }
   }
 }
 
@@ -145,11 +154,12 @@ app.whenReady().then(() => {
 
     try {
       const reply = await requestGroqReply(history)
-      // Action envelopes (open app/website, analyze screen) are executed
-      // here; plain replies pass straight through.
+      // Action envelopes (open app/website, analyze screen, video playback)
+      // are executed here; plain replies pass straight through. Player
+      // directives ride along for the renderer's embedded player.
       const lastUser = [...history].reverse().find((turn) => turn.role === 'user')?.content ?? ''
-      const message = await routeReply(reply, lastUser)
-      return { ok: true as const, message }
+      const routed = await routeReply(reply, lastUser)
+      return { ok: true as const, message: routed.text, player: routed.player }
     } catch (error) {
       if (error instanceof GroqConfigError || error instanceof GroqRequestError) {
         return { ok: false as const, error: error.message }
@@ -219,10 +229,10 @@ app.whenReady().then(() => {
     }
   })
 
-  createWindow()
+  void createWindow()
 
   app.on('activate', function () {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) void createWindow()
   })
 })
 

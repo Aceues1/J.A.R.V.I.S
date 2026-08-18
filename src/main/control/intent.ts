@@ -5,12 +5,20 @@
 // application", …) into ONE canonical action, so the router never silently
 // drops a slightly-differently-worded command.
 
-export type CanonicalAction = 'open_app' | 'open_website' | 'analyze_screen'
+export type CanonicalAction =
+  | 'open_app'
+  | 'open_website'
+  | 'analyze_screen'
+  | 'play_video'
+  | 'pause_video'
+  | 'resume_video'
+  | 'set_volume'
 
 export interface ActionEnvelope {
   action: CanonicalAction
   target?: string
   say?: string
+  volume?: number
 }
 
 const ACTION_SYNONYMS: Record<CanonicalAction, string[]> = {
@@ -55,7 +63,32 @@ const ACTION_SYNONYMS: Record<CanonicalAction, string[]> = {
     'capture_screen',
     'screenshot',
     'see_screen'
-  ]
+  ],
+  play_video: [
+    'play_video',
+    'playvideo',
+    'play_a_video',
+    'play_youtube',
+    'play_youtube_video',
+    'find_video',
+    'find_a_video',
+    'search_video',
+    'video_about',
+    'youtube_video'
+  ],
+  pause_video: ['pause_video', 'pausevideo', 'pause', 'pause_playback', 'pause_the_video'],
+  resume_video: [
+    'resume_video',
+    'resumevideo',
+    'resume',
+    'resume_playback',
+    'continue_video',
+    'continue',
+    'unpause',
+    'unpause_video',
+    'play_again'
+  ],
+  set_volume: ['set_volume', 'setvolume', 'volume', 'change_volume', 'adjust_volume']
 }
 
 export function canonIntent(raw: unknown): CanonicalAction | null {
@@ -76,6 +109,7 @@ interface RawEnvelope {
   action: string
   target?: string
   say?: string
+  volume?: number
 }
 
 function extractJson(reply: string): RawEnvelope | null {
@@ -88,12 +122,21 @@ function extractJson(reply: string): RawEnvelope | null {
   try {
     const parsed = JSON.parse(candidate)
     if (typeof parsed !== 'object' || parsed === null) return null
-    const { action, target, say } = parsed as Record<string, unknown>
+    const { action, target, say, volume } = parsed as Record<string, unknown>
     if (typeof action !== 'string') return null
+    // Volume arrives as a number or numeric string; anything else is dropped
+    // here and rejected downstream.
+    const numericVolume =
+      typeof volume === 'number'
+        ? volume
+        : typeof volume === 'string' && volume.trim() !== '' && Number.isFinite(Number(volume))
+          ? Number(volume)
+          : undefined
     return {
       action,
       target: typeof target === 'string' ? target.slice(0, 200) : undefined,
-      say: typeof say === 'string' ? say.slice(0, 300) : undefined
+      say: typeof say === 'string' ? say.slice(0, 300) : undefined,
+      volume: numericVolume
     }
   } catch {
     return null
@@ -113,5 +156,5 @@ export function parseActionReply(
 
   const action = canonIntent(raw.action)
   if (!action) return { unsupported: raw.action }
-  return { envelope: { action, target: raw.target, say: raw.say } }
+  return { envelope: { action, target: raw.target, say: raw.say, volume: raw.volume } }
 }

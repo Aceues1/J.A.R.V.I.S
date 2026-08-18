@@ -4,6 +4,8 @@ import { ScanLine } from '@renderer/components/hud/ScanLine'
 import { TelemetryGrid } from '@renderer/components/telemetry/TelemetryGrid'
 import { DiagnosticsLog } from '@renderer/components/telemetry/DiagnosticsLog'
 import { ConversationPanel } from '@renderer/components/chat/ConversationPanel'
+import { VideoPlayerPanel } from '@renderer/components/media/VideoPlayerPanel'
+import type { PlayerStatus } from '@renderer/hooks/useYouTubePlayer'
 import { cn } from '@renderer/lib/cn'
 
 interface CommandCenterProps {
@@ -14,6 +16,12 @@ interface CommandCenterProps {
   isLoading: boolean
   chatError: string | null
   onRetry: () => void
+  playerStatus: PlayerStatus
+  playerTitle: string | null
+  playerEmbedUrl: string | null
+  playerIframeRef: React.RefObject<HTMLIFrameElement | null>
+  onPlayerIframeLoad: () => void
+  onPlayerClose: () => void
 }
 
 const statusReadout: Record<StatusLevel, string> = {
@@ -32,7 +40,13 @@ export function CommandCenter({
   messages,
   isLoading,
   chatError,
-  onRetry
+  onRetry,
+  playerStatus,
+  playerTitle,
+  playerEmbedUrl,
+  playerIframeRef,
+  onPlayerIframeLoad,
+  onPlayerClose
 }: CommandCenterProps): React.JSX.Element {
   // Once an exchange starts, the core yields center stage to the transcript.
   const hasConversation = messages.length > 0 || isLoading || chatError !== null
@@ -74,6 +88,15 @@ export function CommandCenter({
           JARVIS
         </p>
       </div>
+
+      <VideoPlayerPanel
+        status={playerStatus}
+        title={playerTitle}
+        embedUrl={playerEmbedUrl}
+        iframeRef={playerIframeRef}
+        onIframeLoad={onPlayerIframeLoad}
+        onClose={onPlayerClose}
+      />
 
       <div
         className={cn(

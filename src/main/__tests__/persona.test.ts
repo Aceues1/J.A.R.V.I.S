@@ -105,7 +105,7 @@ describe('persona system prompt', () => {
 
   it('locks in capability honesty', () => {
     expect(SYSTEM_PROMPT).toMatch(
-      /Beyond the three supported actions.*cannot yet control the computer/is
+      /Beyond the seven supported actions.*cannot yet control the computer/is
     )
     expect(SYSTEM_PROMPT).toMatch(
       /Never state or imply that an action was performed when the application did not perform it/i
@@ -115,14 +115,27 @@ describe('persona system prompt', () => {
   })
 
   it('defines the strict action envelope protocol', () => {
-    expect(SYSTEM_PROMPT).toMatch(/exactly three actions/i)
+    expect(SYSTEM_PROMPT).toMatch(/exactly seven actions/i)
     expect(SYSTEM_PROMPT).toContain('"action":"open_app"')
     expect(SYSTEM_PROMPT).toContain('"action":"open_website"')
     expect(SYSTEM_PROMPT).toContain('"action":"analyze_screen"')
+    expect(SYSTEM_PROMPT).toContain('"action":"play_video"')
+    expect(SYSTEM_PROMPT).toContain('"action":"pause_video"')
+    expect(SYSTEM_PROMPT).toContain('"action":"resume_video"')
+    expect(SYSTEM_PROMPT).toContain('"action":"set_volume"')
     expect(SYSTEM_PROMPT).toMatch(/ONLY a single-line JSON envelope/i)
     expect(SYSTEM_PROMPT).toMatch(/never invent action names, shell commands, file paths, or URLs/i)
     expect(SYSTEM_PROMPT).toMatch(/used only if the action truly succeeds/i)
     expect(SYSTEM_PROMPT).toMatch(/closing programs, clicking, typing.*still not possible/is)
+  })
+
+  it('keeps play_video distinct from opening YouTube in the browser', () => {
+    expect(SYSTEM_PROMPT).toMatch(/"Play\/find a video about X" means play_video/i)
+    expect(SYSTEM_PROMPT).toMatch(/"Open YouTube" means open_website/i)
+    expect(SYSTEM_PROMPT).toMatch(/plays inside this interface/i)
+    expect(SYSTEM_PROMPT).toMatch(
+      /Bare "pause", "resume", "continue", or "volume 30".*video player/is
+    )
   })
 
   it('grants awareness data with honesty and read-only rules', () => {

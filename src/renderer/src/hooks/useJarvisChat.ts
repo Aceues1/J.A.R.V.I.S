@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ChatMessage } from '@renderer/types/hud'
+import type { ChatMessage, PlayerDirective } from '@renderer/types/hud'
 
 function createMessage(role: ChatMessage['role'], content: string): ChatMessage {
   return {
@@ -26,7 +26,10 @@ interface UseJarvisChatResult {
   retry: () => void
 }
 
-export function useJarvisChat(onEvent?: (event: ChatEvent) => void): UseJarvisChatResult {
+export function useJarvisChat(
+  onEvent?: (event: ChatEvent) => void,
+  onPlayer?: (directive: PlayerDirective) => void
+): UseJarvisChatResult {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -36,9 +39,11 @@ export function useJarvisChat(onEvent?: (event: ChatEvent) => void): UseJarvisCh
   const messagesRef = useRef<ChatMessage[]>(messages)
   const loadingRef = useRef(false)
   const onEventRef = useRef(onEvent)
+  const onPlayerRef = useRef(onPlayer)
   useEffect(() => {
     onEventRef.current = onEvent
-  }, [onEvent])
+    onPlayerRef.current = onPlayer
+  }, [onEvent, onPlayer])
 
   const dispatch = useCallback(async (history: ChatMessage[]) => {
     loadingRef.current = true
@@ -58,6 +63,9 @@ export function useJarvisChat(onEvent?: (event: ChatEvent) => void): UseJarvisCh
           kind: 'received',
           detail: `Response received in ${((performance.now() - startedAt) / 1000).toFixed(1)}s`
         })
+        if (result.player) {
+          onPlayerRef.current?.(result.player)
+        }
       } else {
         setError(result.error)
         onEventRef.current?.({ kind: 'failed', detail: result.error })

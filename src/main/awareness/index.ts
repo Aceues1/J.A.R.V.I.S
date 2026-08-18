@@ -24,7 +24,8 @@ function formatActionAvailability(): string {
   return (
     `Actions available: applications you may open: ${apps.join(', ') || 'none configured'}. ` +
     `Website shortcuts: ${listWebsiteNames().join(', ')}, plus creating a new Google ` +
-    'Doc/Sheet/Slides. You can also analyze the screen on request.'
+    'Doc/Sheet/Slides. You can also analyze the screen on request, and play YouTube videos ' +
+    'inside this interface (play_video) with pause/resume/volume control.'
   )
 }
 

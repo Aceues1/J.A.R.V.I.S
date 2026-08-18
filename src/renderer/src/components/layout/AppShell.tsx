@@ -4,6 +4,7 @@ import { useSimulatedTelemetry } from '@renderer/hooks/useSimulatedTelemetry'
 import { useJarvisChat, type ChatEvent } from '@renderer/hooks/useJarvisChat'
 import { useVoiceInput, type VoiceEvent } from '@renderer/hooks/useVoiceInput'
 import { useSpeechPlayback, type SpeechEvent } from '@renderer/hooks/useSpeechPlayback'
+import { useYouTubePlayer, type PlayerEvent } from '@renderer/hooks/useYouTubePlayer'
 import { HANDS_FREE_OFF, handsFreeReducer } from '@renderer/lib/handsFree'
 import { buildStartupGreeting } from '@renderer/lib/greeting'
 import { useBackendStatus } from '@renderer/hooks/useBackendStatus'
@@ -51,8 +52,20 @@ export function AppShell(): React.JSX.Element {
     [pushLog]
   )
 
-  const { messages, isLoading, error, sendMessage, addAssistantMessage, retry } =
-    useJarvisChat(handleChatEvent)
+  const handlePlayerEvent = useCallback(
+    (event: PlayerEvent) => {
+      pushLog(event.kind === 'failed' ? 'warn' : 'info', `Media: ${event.detail}`)
+    },
+    [pushLog]
+  )
+
+  const player = useYouTubePlayer(handlePlayerEvent)
+  const { handleDirective: handlePlayerDirective } = player
+
+  const { messages, isLoading, error, sendMessage, addAssistantMessage, retry } = useJarvisChat(
+    handleChatEvent,
+    handlePlayerDirective
+  )
 
   // Startup greeting lifecycle: inject once when the backend is ready, then
   // hand off to hands-free listening after the spoken greeting finishes.
@@ -237,6 +250,12 @@ export function AppShell(): React.JSX.Element {
           isLoading={isLoading}
           chatError={error}
           onRetry={retry}
+          playerStatus={player.status}
+          playerTitle={player.title}
+          playerEmbedUrl={player.embedUrl}
+          playerIframeRef={player.iframeRef}
+          onPlayerIframeLoad={player.handleIframeLoad}
+          onPlayerClose={player.close}
         />
         <RightPanel events={eventItems} notes={noteItems} quotes={marketQuotes} />
       </div>

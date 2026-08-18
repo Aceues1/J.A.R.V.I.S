@@ -20,7 +20,22 @@ describe('canonIntent', () => {
     ['look at my screen', 'analyze_screen'],
     ['screen analysis', 'analyze_screen'],
     ['describe screen', 'analyze_screen'],
-    ['screenshot', 'analyze_screen']
+    ['screenshot', 'analyze_screen'],
+    ['play_video', 'play_video'],
+    ['play a video', 'play_video'],
+    ['play youtube video', 'play_video'],
+    ['find video', 'play_video'],
+    ['pause_video', 'pause_video'],
+    ['pause', 'pause_video'],
+    ['pause the video', 'pause_video'],
+    ['resume_video', 'resume_video'],
+    ['resume', 'resume_video'],
+    ['continue', 'resume_video'],
+    ['play again', 'resume_video'],
+    ['unpause', 'resume_video'],
+    ['set_volume', 'set_volume'],
+    ['volume', 'set_volume'],
+    ['change volume', 'set_volume']
   ])('normalizes %j to %s', (input, expected) => {
     expect(canonIntent(input)).toBe(expected)
   })
@@ -53,6 +68,19 @@ describe('parseActionReply', () => {
       const parsed = parseActionReply(JSON.stringify({ action: variant, target: 'x' }))
       expect(parsed).toEqual({ envelope: { action: 'open_app', target: 'x', say: undefined } })
     }
+  })
+
+  it('carries volume through as a number, accepting numeric strings', () => {
+    expect(parseActionReply('{"action":"set_volume","volume":40}')).toEqual({
+      envelope: { action: 'set_volume', target: undefined, say: undefined, volume: 40 }
+    })
+    expect(parseActionReply('{"action":"set_volume","volume":"25"}')).toEqual({
+      envelope: { action: 'set_volume', target: undefined, say: undefined, volume: 25 }
+    })
+    // Non-numeric volume is dropped here; the router rejects it downstream.
+    expect(parseActionReply('{"action":"set_volume","volume":"loud"}')).toEqual({
+      envelope: { action: 'set_volume', target: undefined, say: undefined, volume: undefined }
+    })
   })
 
   it('flags well-formed envelopes with unknown actions as unsupported', () => {
