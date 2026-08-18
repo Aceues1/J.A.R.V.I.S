@@ -29,6 +29,38 @@ export function getApiKey(): string {
   return apiKey
 }
 
+// Token-efficiency caps (main 120b call only; validation storage caps are
+// unchanged in chat-validation.ts — this trims only what is SENT).
+// 16 turns comfortably covers pronoun resolution, action context, and the
+// video-vs-Spotify pause/resume disambiguation; PRO 4 memory carries durable
+// facts beyond the window.
+export const MAX_SENT_TURNS = 16
+export const MAX_SENT_MESSAGE_CHARS = 1200
+// Output cap: persona-contract replies are short spoken prose and envelopes
+// are one line; 640 (with low reasoning effort) leaves ample room.
+export const MAX_REPLY_TOKENS = 640
+// One polite retry on temporary 429s. A Retry-After beyond this is quota
+// exhaustion (daily limits), reported honestly instead of retried.
+const RETRY_MAX_WAIT_MS = 10_000
+const RETRY_DEFAULT_WAIT_MS = 2_000
+
+/** Trim the transcript sent to the model; long messages are clipped. */
+export function trimHistoryForPrompt(history: ChatTurn[]): ChatTurn[] {
+  return history
+    .slice(-MAX_SENT_TURNS)
+    .map((turn) =>
+      turn.content.length > MAX_SENT_MESSAGE_CHARS
+        ? { role: turn.role, content: `${turn.content.slice(0, MAX_SENT_MESSAGE_CHARS)} […]` }
+        : turn
+    )
+}
+
+function retryWaitMs(response: Response): number {
+  const header = response.headers?.get?.('retry-after')
+  const seconds = Number(header)
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : RETRY_DEFAULT_WAIT_MS
+}
+
 export async function requestGroqReply(
   history: ChatTurn[],
   extraContext?: string
@@ -40,32 +72,57 @@ export async function requestGroqReply(
   // weather) — cheap: local reads plus the cached weather feed, with the
   // weather fetch capped so a cold/slow fetch never stalls the chat.
   const weatherContext = await getAwarenessContext()
-  // Optional per-turn context (live web search results) rides after awareness.
+  // Optional per-turn context (memory + live web search) rides after awareness.
   const systemContent = [SYSTEM_PROMPT, weatherContext, extraContext].filter(Boolean).join('\n\n')
 
+  const requestBody: Record<string, unknown> = {
+    model,
+    messages: [{ role: 'system', content: systemContent }, ...trimHistoryForPrompt(history)],
+    temperature: 0.6,
+    max_tokens: MAX_REPLY_TOKENS
+  }
+  // gpt-oss models spend max_tokens on reasoning before the visible reply;
+  // low effort keeps the deliberation short so the tighter cap stays safe.
+  if (model.includes('gpt-oss')) {
+    requestBody.reasoning_effort = 'low'
+  }
+
   let response: Response
-  try {
-    response = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'system', content: systemContent }, ...history],
-        temperature: 0.6,
-        max_tokens: 1024
-      }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
-    })
-  } catch (error) {
-    if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
-      console.error('[groq] request timed out')
-      throw new GroqRequestError('AI backend timed out. Try again.')
+  for (let attempt = 0; ; attempt++) {
+    try {
+      response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+      })
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        (error.name === 'TimeoutError' || error.name === 'AbortError')
+      ) {
+        console.error('[groq] request timed out')
+        throw new GroqRequestError('AI backend timed out. Try again.')
+      }
+      console.error('[groq] network error', error)
+      throw new GroqRequestError('Could not reach the AI backend. Check your network connection.')
     }
-    console.error('[groq] network error', error)
-    throw new GroqRequestError('Could not reach the AI backend. Check your network connection.')
+
+    // Temporary rate limit: wait once for the advertised window and retry.
+    // Anything longer than the cap is real quota exhaustion — honest error.
+    if (response.status === 429 && attempt === 0) {
+      const waitMs = retryWaitMs(response)
+      if (waitMs <= RETRY_MAX_WAIT_MS) {
+        console.error(`[groq] 429 — retrying once after ${waitMs}ms`)
+        await new Promise((resolve) => setTimeout(resolve, waitMs))
+        continue
+      }
+      console.error(`[groq] 429 with retry-after ${waitMs}ms — limit exhausted, not retrying`)
+    }
+    break
   }
 
   if (!response.ok) {

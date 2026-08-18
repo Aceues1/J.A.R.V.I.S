@@ -19,15 +19,14 @@ export type { SystemStatus } from './system'
 
 type Section = { name: string; render: () => string | Promise<string> }
 
+// Data only — the action CAPABILITIES are described once in the persona;
+// this line carries just the dynamic registry contents.
 function formatActionAvailability(): string {
   const apps = listAppNames()
   return (
     `Actions available: applications you may open: ${apps.join(', ') || 'none configured'}. ` +
     `Website shortcuts: ${listWebsiteNames().join(', ')}, plus creating a new Google ` +
-    'Doc/Sheet/Slides. You can also analyze the screen on request, play YouTube videos ' +
-    'inside this interface (play_video) with pause/resume/volume control, control Spotify ' +
-    'music playback (play_music and friends), and the application searches the live web ' +
-    'automatically when a question needs current information.'
+    'Doc/Sheet/Slides.'
   )
 }
 
@@ -40,8 +39,7 @@ const SECTIONS: Section[] = [
 ]
 
 const FOOTER =
-  'Use this awareness data — not model guesses — for questions about the current time, date, ' +
-  'day, schedule, location, and system health. Summarize naturally; never recite the raw block.'
+  'Answer time/date/schedule/location/system questions from this data; never recite the raw block.'
 
 export async function getAwarenessContext(): Promise<string> {
   const lines: string[] = []

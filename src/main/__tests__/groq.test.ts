@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { GroqConfigError, GroqRequestError, getGroqStatus, requestGroqReply } from '../groq'
+import {
+  GroqConfigError,
+  GroqRequestError,
+  MAX_SENT_MESSAGE_CHARS,
+  MAX_SENT_TURNS,
+  getGroqStatus,
+  requestGroqReply,
+  trimHistoryForPrompt
+} from '../groq'
 import { SYSTEM_PROMPT } from '../persona'
 import { resetWeatherCache } from '../weather'
 
@@ -194,5 +202,119 @@ describe('requestGroqReply', () => {
     await expect(requestGroqReply(history)).rejects.toSatisfy(
       (err: Error) => !err.message.includes('test-key')
     )
+  })
+})
+
+describe('token-efficiency contract (main 120b call)', () => {
+  const chatOk = { choices: [{ message: { content: 'ok' } }] }
+  const turn = (i: number): { role: 'user' | 'assistant'; content: string } => ({
+    role: i % 2 === 0 ? 'user' : 'assistant',
+    content: `turn number ${i}`
+  })
+
+  it('keeps the compressed persona under the token budget', () => {
+    // ~4 chars/token: 8,000 chars ≈ 2,000 tokens. Guard against re-bloat.
+    expect(SYSTEM_PROMPT.length).toBeLessThan(8000)
+  })
+
+  it('sends only the most recent turns of a long conversation', async () => {
+    const fetchMock = mockRoutedFetch(chatOk)
+    const long = Array.from({ length: 30 }, (_, i) => turn(i))
+    await requestGroqReply(long)
+    const { messages } = chatCallBody(fetchMock)
+    expect(messages).toHaveLength(1 + MAX_SENT_TURNS)
+    expect(messages[1].content).toBe(`turn number ${30 - MAX_SENT_TURNS}`)
+    expect(messages[messages.length - 1].content).toBe('turn number 29')
+  })
+
+  it('clips excessively long individual messages, marking the cut', () => {
+    const trimmed = trimHistoryForPrompt([
+      { role: 'user', content: 'x'.repeat(5000) },
+      { role: 'user', content: 'short' }
+    ])
+    expect(trimmed[0].content.length).toBeLessThanOrEqual(MAX_SENT_MESSAGE_CHARS + 10)
+    expect(trimmed[0].content.endsWith('[…]')).toBe(true)
+    expect(trimmed[1].content).toBe('short')
+  })
+
+  it('caps output tokens and keeps gpt-oss reasoning short', async () => {
+    const fetchMock = mockRoutedFetch(chatOk)
+    await requestGroqReply(history)
+    const body = chatCallBody(fetchMock) as unknown as Record<string, unknown>
+    expect(body.max_tokens).toBe(640)
+    expect(body.reasoning_effort).toBe('low')
+  })
+
+  it('omits reasoning_effort for non-gpt-oss model overrides', async () => {
+    vi.stubEnv('GROQ_MODEL', 'some-other-model')
+    const fetchMock = mockRoutedFetch(chatOk)
+    await requestGroqReply(history)
+    const body = chatCallBody(fetchMock) as unknown as Record<string, unknown>
+    expect('reasoning_effort' in body).toBe(false)
+  })
+})
+
+describe('429 handling', () => {
+  const chatOk = { choices: [{ message: { content: 'recovered' } }] }
+
+  function mock429Then(
+    retryAfterSeconds: string | null,
+    thenBody: unknown,
+    thenStatus = 200
+  ): ReturnType<typeof vi.fn> {
+    let calls = 0
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (String(url).includes('/forecast')) return Promise.reject(new TypeError('down'))
+      calls += 1
+      if (calls === 1) {
+        return Promise.resolve({
+          ok: false,
+          status: 429,
+          headers: { get: (h: string) => (h === 'retry-after' ? retryAfterSeconds : null) },
+          text: () => Promise.resolve('rate limited')
+        })
+      }
+      return Promise.resolve({
+        ok: thenStatus >= 200 && thenStatus < 300,
+        status: thenStatus,
+        headers: { get: () => null },
+        text: () => Promise.resolve(JSON.stringify(thenBody)),
+        json: () => Promise.resolve(thenBody)
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  const chatCalls = (fetchMock: ReturnType<typeof vi.fn>): number =>
+    fetchMock.mock.calls.filter((c) => String(c[0]).includes('/chat/completions')).length
+
+  it('retries exactly once after a short Retry-After and succeeds', async () => {
+    const fetchMock = mock429Then('1', chatOk)
+    await expect(requestGroqReply(history)).resolves.toBe('recovered')
+    expect(chatCalls(fetchMock)).toBe(2)
+  })
+
+  it('never retries a long Retry-After — quota exhaustion is reported honestly', async () => {
+    const fetchMock = mock429Then('3600', chatOk)
+    await expect(requestGroqReply(history)).rejects.toThrow(/rate limit/i)
+    expect(chatCalls(fetchMock)).toBe(1)
+  })
+
+  it('gives up honestly after the single retry — no retry loops', async () => {
+    let calls = 0
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (String(url).includes('/forecast')) return Promise.reject(new TypeError('down'))
+      calls += 1
+      return Promise.resolve({
+        ok: false,
+        status: 429,
+        headers: { get: (h: string) => (h === 'retry-after' ? '1' : null) },
+        text: () => Promise.resolve('still limited')
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(requestGroqReply(history)).rejects.toThrow(/rate limit/i)
+    expect(calls).toBe(2)
   })
 })
