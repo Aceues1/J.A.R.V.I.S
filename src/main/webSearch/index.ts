@@ -14,7 +14,7 @@ import { fetchTechCrunchAiNews, isAiNewsQuery } from './techcrunch'
 import { detectMarketQuery, fetchMarketQuote } from './market'
 import { detectOtherLocationWeather, isExistingWeatherLocation, fetchWttrWeather } from './wttr'
 import { detectInstagramQuery, fetchInstagramFollowers } from './instagram'
-import { isNewsQuery, refineNewsResults } from './quality'
+import { buildNewsQueryVariants, isNewsQuery, mergeResults, refineNewsResults } from './quality'
 import { WebSearchError, type SearchResult } from './types'
 
 export interface LiveSearchContext {
@@ -117,38 +117,66 @@ export interface WebSearchOutcome {
  * articles. Throws WebSearchError when every applicable layer fails outright.
  */
 export async function searchWeb(query: string): Promise<WebSearchOutcome> {
-  const newsish = isNewsQuery(query)
-  // Kept as the honest last resort when every layer yields only category pages.
-  let categoryOnly: WebSearchOutcome | null = null
+  return isNewsQuery(query) ? searchNews(query) : searchGeneral(query)
+}
 
-  let ddgFailure: string | null = null
-  try {
-    const raw = await searchDuckDuckGo(query, { preferRecent: newsish })
-    const results = newsish ? refineNewsResults(raw) : raw
-    if (results.length > 0) return { source: 'DuckDuckGo', results }
-    if (raw.length > 0) {
-      ddgFailure = 'only category/landing pages'
-      categoryOnly = { source: 'DuckDuckGo', results: raw, categoryPagesOnly: true }
-    } else {
-      ddgFailure = 'no results'
-    }
-  } catch (error) {
-    ddgFailure = error instanceof Error ? error.message : 'failed'
+const MAX_RESULTS = 6
+
+function sourceLabel(results: SearchResult[]): string {
+  return [...new Set(results.map((result) => result.source))].join(' + ')
+}
+
+/**
+ * News path: a bounded fan-out instead of one broad engine query. Broad
+ * queries like "latest AI news" make engines return hub/section pages, so
+ * we run at most two targeted DuckDuckGo queries IN PARALLEL — and, for
+ * AI-news queries, the TechCrunch RSS feed as a PEER source (its items are
+ * real dated articles), not a last resort. Results are merged, deduplicated
+ * by URL, category pages dropped, and everything ranked article-first; weak
+ * hub/roundup pages are pruned only when enough strong articles exist, so
+ * the system is never TechCrunch-only and never over-rejects.
+ */
+async function searchNews(query: string): Promise<WebSearchOutcome> {
+  const variants = buildNewsQueryVariants(query)
+  console.log(`[websearch] news fan-out: ${variants.map((v) => `"${v}"`).join(', ')}`)
+  const tasks: Array<Promise<SearchResult[]>> = variants.map((variant) =>
+    searchDuckDuckGo(variant, { preferRecent: true })
+  )
+  const aiNews = isAiNewsQuery(query)
+  if (aiNews) {
+    tasks.push(fetchTechCrunchAiNews())
   }
-  console.error(`[websearch] DuckDuckGo unusable (${ddgFailure}); trying fallbacks`)
 
+  const settled = await Promise.allSettled(tasks)
+  for (const [index, outcome] of settled.entries()) {
+    if (outcome.status === 'rejected') {
+      console.error(`[websearch] news fetch ${index} failed:`, outcome.reason?.message ?? 'error')
+    }
+  }
+  const raw = mergeResults(
+    settled.map((outcome) => (outcome.status === 'fulfilled' ? outcome.value : []))
+  )
+  console.log(`[websearch] news fan-out merged ${raw.length} unique candidates`)
+
+  const refined = refineNewsResults(raw).slice(0, MAX_RESULTS)
+  if (refined.length > 0) {
+    const label = sourceLabel(refined)
+    console.log(`[websearch] news results: ${refined.length} articles from ${label}`)
+    return { source: label, results: refined }
+  }
+
+  // Nothing article-like anywhere — Brave gets a turn if configured.
   if (braveConfigured()) {
     try {
-      const raw = await searchBrave(query)
-      const results = newsish ? refineNewsResults(raw) : raw
-      if (results.length > 0) {
-        console.log(`[websearch] Brave fallback returned ${results.length} usable results`)
-        return { source: 'Brave Search', results }
+      const braveRaw = await searchBrave(query)
+      const braveRefined = refineNewsResults(braveRaw).slice(0, MAX_RESULTS)
+      if (braveRefined.length > 0) {
+        console.log(`[websearch] Brave fallback returned ${braveRefined.length} usable results`)
+        return { source: 'Brave Search', results: braveRefined }
       }
-      if (raw.length > 0 && !categoryOnly) {
-        categoryOnly = { source: 'Brave Search', results: raw, categoryPagesOnly: true }
+      if (braveRaw.length > 0 && raw.length === 0) {
+        return { source: 'Brave Search', results: braveRaw, categoryPagesOnly: true }
       }
-      console.error('[websearch] Brave fallback returned no usable results')
     } catch (error) {
       console.error('[websearch] Brave fallback failed', error)
     }
@@ -156,20 +184,40 @@ export async function searchWeb(query: string): Promise<WebSearchOutcome> {
     console.log('[websearch] Brave fallback skipped (no BRAVE_SEARCH_API_KEY)')
   }
 
-  if (isAiNewsQuery(query)) {
+  if (raw.length > 0) {
+    console.error('[websearch] only category/landing pages available — labelling them honestly')
+    return { source: sourceLabel(raw), results: raw.slice(0, MAX_RESULTS), categoryPagesOnly: true }
+  }
+  throw new WebSearchError('Every web search source failed.')
+}
+
+/** Non-news path: unchanged single-query layering (DuckDuckGo → Brave). */
+async function searchGeneral(query: string): Promise<WebSearchOutcome> {
+  let ddgFailure: string | null = null
+  try {
+    const results = await searchDuckDuckGo(query)
+    if (results.length > 0) return { source: 'DuckDuckGo', results }
+    ddgFailure = 'no results'
+  } catch (error) {
+    ddgFailure = error instanceof Error ? error.message : 'failed'
+  }
+  console.error(`[websearch] DuckDuckGo unusable (${ddgFailure}); trying fallbacks`)
+
+  if (braveConfigured()) {
     try {
-      const results = await fetchTechCrunchAiNews()
-      console.log(`[websearch] TechCrunch fallback returned ${results.length} items`)
-      return { source: 'TechCrunch RSS', results }
+      const results = await searchBrave(query)
+      if (results.length > 0) {
+        console.log(`[websearch] Brave fallback returned ${results.length} results`)
+        return { source: 'Brave Search', results }
+      }
+      console.error('[websearch] Brave fallback returned no results')
     } catch (error) {
-      console.error('[websearch] TechCrunch fallback failed', error)
+      console.error('[websearch] Brave fallback failed', error)
     }
+  } else {
+    console.log('[websearch] Brave fallback skipped (no BRAVE_SEARCH_API_KEY)')
   }
 
-  if (categoryOnly) {
-    console.error('[websearch] only category/landing pages available — labelling them honestly')
-    return categoryOnly
-  }
   throw new WebSearchError('Every web search source failed.')
 }
 

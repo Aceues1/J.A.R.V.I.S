@@ -145,16 +145,61 @@ describe('searchWeb — layered fallback', () => {
     expect(hits.tc).toBe(1)
   })
 
-  it('adds the past-week recency filter for news queries only', async () => {
+  it('news queries fan out to two targeted DDG queries with df=w; non-news stays single', async () => {
     const hits = stubRoutes({
-      ddg: { match: (u) => u.includes('duckduckgo.com/html'), body: DDG_HTML }
+      ddg: { match: (u) => u.includes('duckduckgo.com/html'), body: DDG_HTML },
+      tc: { match: (u) => u.includes('techcrunch.com'), body: RSS_XML }
     })
     await searchWeb('latest AI news')
+    expect(hits.ddg).toBe(2) // bounded fan-out: original + one targeted variant
     await searchWeb('anything current')
-    expect(hits.ddg).toBe(2)
+    expect(hits.ddg).toBe(3) // non-news: single query
+
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>
-    expect(String(fetchMock.mock.calls[0][0])).toContain('&df=w')
-    expect(String(fetchMock.mock.calls[1][0])).not.toContain('df=w')
+    const ddgCalls = fetchMock.mock.calls
+      .map((c) => String(c[0]))
+      .filter((u) => u.includes('/html/'))
+    expect(ddgCalls[0]).toContain('&df=w')
+    expect(ddgCalls[1]).toContain('&df=w')
+    expect(decodeURIComponent(ddgCalls[1])).toContain('OpenAI Anthropic')
+    expect(ddgCalls[2]).not.toContain('df=w')
+  })
+
+  it('uses TechCrunch RSS as a PEER source for AI news — dated articles beat hub pages', async () => {
+    const recent = new Date(Date.now() - 3600_000).toUTCString()
+    const richRss =
+      '<rss><channel>' +
+      [1, 2, 3]
+        .map(
+          (n) =>
+            `<item><title>Concrete AI story ${n}</title>` +
+            `<link>https://techcrunch.com/2026/08/18/concrete-ai-story-number-${n}/</link>` +
+            `<pubDate>${recent}</pubDate>` +
+            `<description>Company ${n} shipped a specific model with real numbers today.</description></item>`
+        )
+        .join('') +
+      '</channel></rss>'
+    // DDG returns exactly the real Windows failure shapes: hub/roundup pages.
+    const hubHtml =
+      '<a class="result__a" href="https://www.reuters.com/technology/ai-roundup/">Reuters AI roundup: artificial intelligence coverage</a>' +
+      '<a class="result__snippet" href="#">Coverage of AI.</a>' +
+      '<a class="result__a" href="https://www.bloomberg.com/ai-race">The AI Race</a>' +
+      '<a class="result__snippet" href="#">Bloomberg explores the AI race.</a>' +
+      '<a class="result__a" href="https://aitoolsrecap.com/daily">AI Tools Recap – Daily AI News Summary</a>' +
+      '<a class="result__snippet" href="#">Daily AI roundup.</a>'
+    stubRoutes({
+      ddg: { match: (u) => u.includes('duckduckgo.com/html'), body: hubHtml },
+      tc: { match: (u) => u.includes('techcrunch.com'), body: richRss }
+    })
+    const { source, results } = await searchWeb('latest AI news')
+    const titles = results.map((r) => r.title)
+    expect(titles).toContain('Concrete AI story 1')
+    // The Windows offenders must NOT pad the block when real articles exist:
+    expect(titles.join()).not.toContain('AI Race')
+    expect(titles.join()).not.toContain('Recap')
+    expect(titles.join()).not.toContain('roundup')
+    expect(results[0].publishedAt).toBe(recent)
+    expect(source).toContain('TechCrunch RSS')
   })
 
   it('returns category pages honestly labelled when no layer has real articles', async () => {
@@ -267,7 +312,7 @@ describe('getLiveSearchContext — per-turn coordinator', () => {
     expect(context?.source).toBe('DuckDuckGo')
     expect(context?.query).toBe('latest AI news')
     expect(context?.block).toContain('Result One')
-    expect(hits.ddg).toBe(1)
+    expect(hits.ddg).toBe(2) // news fan-out: two targeted queries
   })
 
   it('routes market queries to Yahoo Finance, never to general search', async () => {
@@ -327,11 +372,11 @@ describe('getLiveSearchContext — per-turn coordinator', () => {
     })
     await getLiveSearchContext([user('latest AI news?')])
     await getLiveSearchContext([user('latest AI news?')])
-    expect(hits.ddg).toBe(1) // second call served from cache
+    expect(hits.ddg).toBe(2) // second call served from cache (fan-out = 2 fetches)
     expect(SEARCH_CACHE_TTL_MS).toBeLessThanOrEqual(60_000) // short-lived by contract
 
     resetSearchCache()
     await getLiveSearchContext([user('latest AI news?')])
-    expect(hits.ddg).toBe(2)
+    expect(hits.ddg).toBe(4)
   })
 })
