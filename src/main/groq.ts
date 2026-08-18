@@ -39,10 +39,87 @@ export const MAX_SENT_MESSAGE_CHARS = 1200
 // Output cap: persona-contract replies are short spoken prose and envelopes
 // are one line; 640 (with low reasoning effort) leaves ample room.
 export const MAX_REPLY_TOKENS = 640
-// One polite retry on temporary 429s. A Retry-After beyond this is quota
-// exhaustion (daily limits), reported honestly instead of retried.
-const RETRY_MAX_WAIT_MS = 10_000
+// One polite retry on temporary 429s. TPM windows advertise Retry-After up
+// to about a minute; anything longer is daily/monthly quota exhaustion,
+// reported honestly instead of retried.
+const RETRY_MAX_WAIT_MS = 60_000
 const RETRY_DEFAULT_WAIT_MS = 2_000
+
+// ---- client-side TPM budget pacer -----------------------------------------
+// Groq's limiter charges each request (input tokens + max_tokens reservation)
+// against a rolling 60-second window. Measured: three consecutive turns cost
+// ~9.6k against the account's 8k TPM — the third command 429s. The pacer
+// keeps a matching ledger and, when a request would overrun the budget,
+// waits exactly until enough of the window rolls off (never an arbitrary
+// delay). The budget defaults conservatively under the account limit and is
+// configurable via GROQ_TPM_BUDGET (a paid tier makes pacing a no-op).
+const DEFAULT_TPM_BUDGET = 7_200
+const PACE_WINDOW_MS = 60_000
+export const MAX_PACE_WAIT_MS = 45_000
+
+interface LedgerEntry {
+  at: number
+  tokens: number
+}
+let ledger: LedgerEntry[] = []
+// Serializes budget checks so concurrent requests cannot race the ledger.
+let paceQueue: Promise<void> = Promise.resolve()
+
+/** Test hook: forget all recorded charges. */
+export function resetRateLedger(): void {
+  ledger = []
+}
+
+function tpmBudget(): number {
+  const raw = Number(process.env.GROQ_TPM_BUDGET)
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TPM_BUDGET
+}
+
+/** The same estimate Groq's limiter uses: input chars/4 plus the output reservation. */
+export function estimateTpmCharge(messages: Array<{ content: string }>, maxTokens: number): number {
+  const contentChars = messages.reduce((total, message) => total + message.content.length, 0)
+  return Math.round(contentChars / 4) + maxTokens
+}
+
+/**
+ * Record this request's charge, first waiting (bounded) if the rolling
+ * window can't fit it yet. Requests queue through one lock, so parallel
+ * callers cannot bypass the accounting.
+ */
+export async function reserveTpmBudget(tokens: number): Promise<void> {
+  const previous = paceQueue
+  let release!: () => void
+  paceQueue = new Promise((resolve) => {
+    release = resolve
+  })
+  await previous
+  try {
+    const now = Date.now()
+    ledger = ledger.filter((entry) => now - entry.at < PACE_WINDOW_MS)
+    const used = ledger.reduce((total, entry) => total + entry.tokens, 0)
+    const budget = tpmBudget()
+
+    if (used + tokens > budget && ledger.length > 0) {
+      // Walk the (chronological) ledger until enough charges have expired.
+      let waitMs = 0
+      let remaining = used
+      for (const entry of ledger) {
+        waitMs = entry.at + PACE_WINDOW_MS - now
+        remaining -= entry.tokens
+        if (remaining + tokens <= budget) break
+      }
+      waitMs = Math.min(Math.max(waitMs, 0), MAX_PACE_WAIT_MS)
+      if (waitMs > 0) {
+        console.log(`[groq] pacing ${Math.ceil(waitMs / 1000)}s to stay inside the rate window`)
+        await new Promise((resolve) => setTimeout(resolve, waitMs))
+      }
+    }
+    ledger.push({ at: Date.now(), tokens })
+  } finally {
+    release()
+  }
+}
+// ---------------------------------------------------------------------------
 
 /** Trim the transcript sent to the model; long messages are clipped. */
 export function trimHistoryForPrompt(history: ChatTurn[]): ChatTurn[] {
@@ -86,6 +163,13 @@ export async function requestGroqReply(
   if (model.includes('gpt-oss')) {
     requestBody.reasoning_effort = 'low'
   }
+
+  // Pace against the rolling TPM window BEFORE sending — prevents the 429
+  // instead of reacting to it. Charged once per turn (the retry below reuses
+  // the same reservation).
+  await reserveTpmBudget(
+    estimateTpmCharge(requestBody.messages as Array<{ content: string }>, MAX_REPLY_TOKENS)
+  )
 
   let response: Response
   for (let attempt = 0; ; attempt++) {

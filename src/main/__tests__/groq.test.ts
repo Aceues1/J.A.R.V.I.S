@@ -2,10 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   GroqConfigError,
   GroqRequestError,
+  MAX_PACE_WAIT_MS,
   MAX_SENT_MESSAGE_CHARS,
   MAX_SENT_TURNS,
+  estimateTpmCharge,
   getGroqStatus,
+  reserveTpmBudget,
   requestGroqReply,
+  resetRateLedger,
   trimHistoryForPrompt
 } from '../groq'
 import { SYSTEM_PROMPT } from '../persona'
@@ -70,6 +74,7 @@ function mockFetchResponse(status: number, body: unknown): void {
 beforeEach(() => {
   vi.stubEnv('GROQ_API_KEY', 'test-key')
   resetWeatherCache()
+  resetRateLedger()
 })
 
 afterEach(() => {
@@ -315,6 +320,134 @@ describe('429 handling', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
     await expect(requestGroqReply(history)).rejects.toThrow(/rate limit/i)
+    expect(calls).toBe(2)
+  })
+})
+
+describe('client-side TPM budget pacer', () => {
+  let logSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    logSpy.mockRestore()
+  })
+
+  const pacingLogs = (): string[] =>
+    logSpy.mock.calls.map((c) => String(c[0])).filter((line) => line.includes('[groq] pacing'))
+
+  it('estimates the charge exactly as input chars/4 plus the output reservation', () => {
+    expect(
+      estimateTpmCharge([{ content: 'a'.repeat(4000) }, { content: 'b'.repeat(400) }], 640)
+    ).toBe(1100 + 640)
+  })
+
+  it('records charges without waiting while the budget fits', async () => {
+    vi.stubEnv('GROQ_TPM_BUDGET', '7200')
+    await reserveTpmBudget(3000)
+    await reserveTpmBudget(3000) // 6000 ≤ 7200: immediate
+    expect(pacingLogs()).toHaveLength(0)
+  })
+
+  it('waits exactly until the oldest charge rolls out of the 60s window', async () => {
+    vi.useFakeTimers()
+    vi.stubEnv('GROQ_TPM_BUDGET', '4000')
+    await reserveTpmBudget(3000) // recorded at t=0
+    vi.advanceTimersByTime(30_000)
+
+    const second = reserveTpmBudget(3000) // needs the t=0 charge gone (expires t=60)
+    await vi.advanceTimersByTimeAsync(30_000)
+    await second
+    expect(pacingLogs()).toEqual(['[groq] pacing 30s to stay inside the rate window'])
+  })
+
+  it('caps the pacing wait at 45 seconds', async () => {
+    vi.useFakeTimers()
+    vi.stubEnv('GROQ_TPM_BUDGET', '100')
+    await reserveTpmBudget(3000) // empty ledger: sent immediately (pacing can't help)
+    const second = reserveTpmBudget(3000) // full 60s wait needed → capped at 45
+    await vi.advanceTimersByTimeAsync(MAX_PACE_WAIT_MS)
+    await second
+    expect(pacingLogs()).toEqual(['[groq] pacing 45s to stay inside the rate window'])
+    expect(MAX_PACE_WAIT_MS).toBe(45_000)
+  })
+
+  it('honors a GROQ_TPM_BUDGET override — a high budget disables pacing', async () => {
+    vi.stubEnv('GROQ_TPM_BUDGET', '1000000')
+    for (let i = 0; i < 6; i++) await reserveTpmBudget(5000)
+    expect(pacingLogs()).toHaveLength(0)
+  })
+
+  it('rolls charges out of the window — after 60s the budget is free again', async () => {
+    vi.useFakeTimers()
+    vi.stubEnv('GROQ_TPM_BUDGET', '4000')
+    await reserveTpmBudget(3000)
+    vi.advanceTimersByTime(61_000)
+    await reserveTpmBudget(3000) // old charge expired: immediate
+    expect(pacingLogs()).toHaveLength(0)
+  })
+
+  it('serializes concurrent reservations — parallel callers cannot race the ledger', async () => {
+    vi.useFakeTimers()
+    vi.stubEnv('GROQ_TPM_BUDGET', '4000')
+    const both = Promise.all([reserveTpmBudget(3000), reserveTpmBudget(3000)])
+    await vi.advanceTimersByTimeAsync(MAX_PACE_WAIT_MS)
+    await both
+    // The second caller saw the first's reservation and paced (capped wait).
+    expect(pacingLogs()).toEqual(['[groq] pacing 45s to stay inside the rate window'])
+  })
+
+  it('requestGroqReply paces before sending (integration, budget fits → immediate)', async () => {
+    mockRoutedFetch({ choices: [{ message: { content: 'ok' } }] })
+    await requestGroqReply(history)
+    await requestGroqReply(history) // ~6k of ~7.2k default budget: no pacing
+    expect(pacingLogs()).toHaveLength(0)
+  })
+})
+
+describe('429 Retry-After ceiling', () => {
+  const chatOk = { choices: [{ message: { content: 'ok' } }] }
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('retries a header-backed Retry-After of up to 60 seconds', async () => {
+    // Warm the awareness caches under real timers first, so fake timers only
+    // govern the retry wait (system stats sample uses an internal timer).
+    mockRoutedFetch(chatOk)
+    await requestGroqReply(history)
+
+    let calls = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) => {
+        if (String(url).includes('/forecast')) return Promise.reject(new TypeError('down'))
+        calls += 1
+        if (calls === 1) {
+          return Promise.resolve({
+            ok: false,
+            status: 429,
+            headers: { get: (h: string) => (h === 'retry-after' ? '30' : null) },
+            text: () => Promise.resolve('tpm window')
+          })
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: () => Promise.resolve(JSON.stringify(chatOk)),
+          json: () => Promise.resolve(chatOk)
+        })
+      })
+    )
+    vi.useFakeTimers()
+    const reply = requestGroqReply(history)
+    await vi.advanceTimersByTimeAsync(31_000)
+    await expect(reply).resolves.toBe('ok')
     expect(calls).toBe(2)
   })
 })
