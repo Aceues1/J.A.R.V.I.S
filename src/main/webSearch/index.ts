@@ -45,8 +45,16 @@ const UNTRUSTED_NOTE =
 
 export function formatResultsBlock(query: string, source: string, results: SearchResult[]): string {
   const lines = results.map((result, index) => {
-    const date = result.publishedAt ? ` (${result.publishedAt})` : ''
-    return `${index + 1}. ${result.title}${date}\n   ${result.url}\n   ${result.snippet || '(no snippet)'}`
+    // Label each result with its outlet (domain) and date so the model can
+    // cite concrete sources instead of speaking in generalities.
+    let outlet = ''
+    try {
+      outlet = new URL(result.url).hostname.replace(/^www\./, '')
+    } catch {
+      // leave outlet empty for the rare unparseable URL
+    }
+    const meta = [outlet, result.publishedAt].filter(Boolean).join(', ')
+    return `${index + 1}. ${result.title}${meta ? ` (${meta})` : ''}\n   ${result.url}\n   ${result.snippet || '(no snippet)'}`
   })
   const sourceNote =
     source === 'TechCrunch RSS'
@@ -57,9 +65,14 @@ export function formatResultsBlock(query: string, source: string, results: Searc
     `Query: ${query}\n` +
     `Source: ${source}${sourceNote}\n` +
     `${lines.join('\n')}\n` +
-    'Answer the user from these live results, summarizing naturally in your own voice — do not ' +
-    'recite every result or constantly name the search engine. If the results do not actually ' +
-    `answer the question, say so honestly. ${UNTRUSTED_NOTE}`
+    'Answer with the concrete substance of these results: lead with the most specific, recent ' +
+    'headlines and facts they contain — names, products, numbers, dates — never with generic ' +
+    'observations. Vague filler like "there have been many developments" or "AI is evolving ' +
+    'rapidly" is a failed answer; every claim must be traceable to a result above. Name the ' +
+    'outlet (shown in parentheses) when it adds weight — "According to <outlet>, …" — without ' +
+    'crediting a source in every sentence, and do not constantly name the search engine itself. ' +
+    'If the results are thin or off-topic, say exactly what they do and do not cover instead of ' +
+    `padding. ${UNTRUSTED_NOTE}`
   )
 }
 

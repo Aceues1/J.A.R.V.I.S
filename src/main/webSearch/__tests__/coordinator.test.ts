@@ -146,10 +146,35 @@ describe('formatting', () => {
     expect(block).toContain('# Live web search results')
     expect(block).toContain('Query: ai news')
     expect(block).toContain('Source: DuckDuckGo')
-    expect(block).toContain('1. T1\n   https://a.example.com\n   S1')
-    expect(block).toContain('2. T2')
+    // Each result is labelled with its outlet so answers can cite it.
+    expect(block).toContain('1. T1 (a.example.com)\n   https://a.example.com\n   S1')
+    expect(block).toContain('2. T2 (b.example.com)')
     expect(block).toContain('untrusted')
     expect(block).toContain('do not claim to have read full articles')
+  })
+
+  it('demands concrete, specific answers — vague summaries are a failed answer', () => {
+    const block = formatResultsBlock('ai news', 'DuckDuckGo', [
+      { title: 'T', url: 'https://a.example.com', snippet: 'S', source: 'DuckDuckGo' }
+    ])
+    expect(block).toContain('lead with the most specific, recent headlines and facts')
+    expect(block).toContain('names, products, numbers, dates')
+    expect(block).toContain('is a failed answer')
+    expect(block).toContain('every claim must be traceable to a result above')
+    expect(block).toContain('According to <outlet>')
+  })
+
+  it('includes the RSS publication date alongside the outlet', () => {
+    const block = formatResultsBlock('ai news', 'TechCrunch RSS', [
+      {
+        title: 'T',
+        url: 'https://techcrunch.com/x/',
+        snippet: 'S',
+        source: 'TechCrunch RSS',
+        publishedAt: 'Mon, 18 Aug 2026 09:00:00 +0000'
+      }
+    ])
+    expect(block).toContain('1. T (techcrunch.com, Mon, 18 Aug 2026 09:00:00 +0000)')
   })
 
   it('labels TechCrunch as a single-outlet source, not the whole web', () => {
