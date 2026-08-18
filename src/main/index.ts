@@ -1,5 +1,5 @@
 import 'dotenv/config'
-import { app, shell, session, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, session, desktopCapturer, screen, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -15,6 +15,31 @@ import {
 } from './tts'
 import { WeatherError, getWeatherReport } from './weather'
 import { getSystemStatus } from './awareness'
+import { registerAppsDir } from './control/apps'
+import { registerExternalOpener } from './control/websites'
+import { registerScreenCapturer, routeReply } from './control/router'
+import { MAX_SCREENS, type ScreenImage } from './vision'
+
+// Captures every monitor as a labelled JPEG data URL. desktopCapturer reads
+// the displays themselves, so this works while the JARVIS window is
+// minimized or hidden.
+async function captureAllScreens(): Promise<ScreenImage[]> {
+  const displays = screen.getAllDisplays()
+  const primaryId = screen.getPrimaryDisplay().id
+  const sources = await desktopCapturer.getSources({
+    types: ['screen'],
+    thumbnailSize: { width: 1920, height: 1080 }
+  })
+  return sources.slice(0, MAX_SCREENS).map((source, index) => {
+    const display = displays.find((d) => String(d.id) === source.display_id)
+    const primary = display && display.id === primaryId ? ', primary' : ''
+    const size = display ? `, ${display.size.width}x${display.size.height}` : ''
+    return {
+      label: `Display ${index + 1} of ${sources.length}${primary}${size}`,
+      dataUrl: `data:image/jpeg;base64,${source.thumbnail.toJPEG(70).toString('base64')}`
+    }
+  })
+}
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -56,6 +81,12 @@ function createWindow(): void {
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.aceues1.jarvis')
+
+  // Computer-control wiring: allowlisted registry in userData, the default
+  // browser as the only URL opener, and the display capturer for vision.
+  registerAppsDir(app.getPath('userData'))
+  registerExternalOpener((url) => shell.openExternal(url))
+  registerScreenCapturer(captureAllScreens)
 
   // The renderer only ever needs the microphone; deny every other permission.
   session.defaultSession.setPermissionRequestHandler(
@@ -111,7 +142,11 @@ app.whenReady().then(() => {
     }
 
     try {
-      const message = await requestGroqReply(history)
+      const reply = await requestGroqReply(history)
+      // Action envelopes (open app/website, analyze screen) are executed
+      // here; plain replies pass straight through.
+      const lastUser = [...history].reverse().find((turn) => turn.role === 'user')?.content ?? ''
+      const message = await routeReply(reply, lastUser)
       return { ok: true as const, message }
     } catch (error) {
       if (error instanceof GroqConfigError || error instanceof GroqRequestError) {

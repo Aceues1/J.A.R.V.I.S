@@ -3,6 +3,8 @@ import { formatScheduleContext } from './schedule'
 import { formatLocationContext } from './location'
 import { formatSystemForPrompt, getSystemStatus } from './system'
 import { getWeatherPromptContext } from '../weather'
+import { listAppNames } from '../control/apps'
+import { listWebsiteNames } from '../control/websites'
 
 // The JARVIS Awareness Layer: independent modules (time, schedule, location,
 // system, weather) assembled into one compact context block for the chat
@@ -17,11 +19,21 @@ export type { SystemStatus } from './system'
 
 type Section = { name: string; render: () => string | Promise<string> }
 
+function formatActionAvailability(): string {
+  const apps = listAppNames()
+  return (
+    `Actions available: applications you may open: ${apps.join(', ') || 'none configured'}. ` +
+    `Website shortcuts: ${listWebsiteNames().join(', ')}, plus creating a new Google ` +
+    'Doc/Sheet/Slides. You can also analyze the screen on request.'
+  )
+}
+
 const SECTIONS: Section[] = [
   { name: 'time', render: () => formatTimeContext() },
   { name: 'location', render: () => formatLocationContext() },
   { name: 'schedule', render: () => formatScheduleContext() },
-  { name: 'system', render: async () => formatSystemForPrompt(await getSystemStatus()) }
+  { name: 'system', render: async () => formatSystemForPrompt(await getSystemStatus()) },
+  { name: 'actions', render: () => formatActionAvailability() }
 ]
 
 const FOOTER =

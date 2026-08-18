@@ -56,6 +56,8 @@ describe('getAwarenessContext', () => {
     expect(context).toContain('configured current location is Trondheim')
     expect(context).toContain('Work schedule: not configured')
     expect(context).toMatch(/System status \(read-only\): CPU \d+%/)
+    expect(context).toContain('Actions available: applications you may open:')
+    expect(context).toContain('Website shortcuts:')
     expect(context).toContain('# Live weather feed')
     expect(context).toContain('Sistranda / Frøya: 12°C')
     expect(context).toContain('never recite the raw block')
@@ -75,6 +77,6 @@ describe('getAwarenessContext', () => {
   it('stays compact enough to ride on every request', async () => {
     mockWeatherFetch(true)
     const context = await getAwarenessContext()
-    expect(context.length).toBeLessThan(2200)
+    expect(context.length).toBeLessThan(3000)
   })
 })

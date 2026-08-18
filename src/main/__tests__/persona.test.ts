@@ -104,12 +104,25 @@ describe('persona system prompt', () => {
   })
 
   it('locks in capability honesty', () => {
-    expect(SYSTEM_PROMPT).toMatch(/cannot yet control the computer/i)
+    expect(SYSTEM_PROMPT).toMatch(
+      /Beyond the three supported actions.*cannot yet control the computer/is
+    )
     expect(SYSTEM_PROMPT).toMatch(
       /Never state or imply that an action was performed when the application did not perform it/i
     )
-    expect(SYSTEM_PROMPT).toMatch(/don't have computer-control access yet/i)
+    expect(SYSTEM_PROMPT).toMatch(/relay it honestly/i)
     expect(SYSTEM_PROMPT).toMatch(/information may be out of date/i)
+  })
+
+  it('defines the strict action envelope protocol', () => {
+    expect(SYSTEM_PROMPT).toMatch(/exactly three actions/i)
+    expect(SYSTEM_PROMPT).toContain('"action":"open_app"')
+    expect(SYSTEM_PROMPT).toContain('"action":"open_website"')
+    expect(SYSTEM_PROMPT).toContain('"action":"analyze_screen"')
+    expect(SYSTEM_PROMPT).toMatch(/ONLY a single-line JSON envelope/i)
+    expect(SYSTEM_PROMPT).toMatch(/never invent action names, shell commands, file paths, or URLs/i)
+    expect(SYSTEM_PROMPT).toMatch(/used only if the action truly succeeds/i)
+    expect(SYSTEM_PROMPT).toMatch(/closing programs, clicking, typing.*still not possible/is)
   })
 
   it('grants awareness data with honesty and read-only rules', () => {
