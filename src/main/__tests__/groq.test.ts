@@ -14,6 +14,7 @@ import {
 } from '../groq'
 import { SYSTEM_PROMPT } from '../persona'
 import { resetWeatherCache } from '../weather'
+import { resetProviderCooldowns } from '../providers'
 
 const weatherEntry = (code: number, temp: number): object => ({
   current: {
@@ -73,8 +74,13 @@ function mockFetchResponse(status: number, body: unknown): void {
 
 beforeEach(() => {
   vi.stubEnv('GROQ_API_KEY', 'test-key')
+  // Isolate from any real fallback keys and forget cross-test cooldowns so
+  // every existing test still exercises the original single-provider paths.
+  vi.stubEnv('OPENROUTER_API_KEY', '')
+  vi.stubEnv('GEMINI_API_KEY', '')
   resetWeatherCache()
   resetRateLedger()
+  resetProviderCooldowns()
 })
 
 afterEach(() => {

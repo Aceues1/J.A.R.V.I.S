@@ -193,9 +193,10 @@ app.whenReady().then(() => {
       // data is needed; an honest failure block when sources fail; and
       // never throws — chat survives any search problem.
       const searchContext = await getLiveSearchContext(history)
-      const extraContext =
-        [memoryContext?.block, searchContext?.block].filter(Boolean).join('\n\n') || undefined
-      const reply = await requestGroqReply(history, extraContext)
+      // Memory rides as separate private context: providers whose free tier
+      // may train on prompts (Gemini fallback) never receive it. The order in
+      // the assembled prompt (memory, then search) is unchanged.
+      const reply = await requestGroqReply(history, searchContext?.block, memoryContext?.block)
       // Action envelopes (open app/website, analyze screen, video playback)
       // are executed here; plain replies pass straight through. Player
       // directives ride along for the renderer's embedded player.

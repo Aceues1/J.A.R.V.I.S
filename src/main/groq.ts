@@ -1,10 +1,16 @@
 import type { ChatTurn } from './chat-validation'
 import { SYSTEM_PROMPT } from './persona'
 import { getAwarenessContext } from './awareness'
+import {
+  clearLapsedCooldown,
+  isCoolingDown,
+  providerChain,
+  setProviderCooldown,
+  type ChatProvider
+} from './providers'
 
 // GROQ_BASE_URL is a main-process-only override used by tests to point at a
 // local mock server; production always talks to the real endpoint.
-const DEFAULT_BASE_URL = 'https://api.groq.com/openai/v1'
 // llama-3.3-70b-versatile was decommissioned by Groq in Aug 2026; requests for it now 404.
 const DEFAULT_MODEL = 'openai/gpt-oss-120b'
 const REQUEST_TIMEOUT_MS = 45_000
@@ -14,7 +20,7 @@ export class GroqRequestError extends Error {}
 
 export function getGroqStatus(): { configured: boolean; model: string } {
   return {
-    configured: Boolean(process.env.GROQ_API_KEY),
+    configured: providerChain().length > 0,
     model: process.env.GROQ_MODEL || DEFAULT_MODEL
   }
 }
@@ -138,47 +144,28 @@ function retryWaitMs(response: Response): number {
   return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : RETRY_DEFAULT_WAIT_MS
 }
 
-export async function requestGroqReply(
-  history: ChatTurn[],
-  extraContext?: string
-): Promise<string> {
-  const apiKey = getApiKey()
-  const baseUrl = process.env.GROQ_BASE_URL || DEFAULT_BASE_URL
-  const model = process.env.GROQ_MODEL || DEFAULT_MODEL
-  // Awareness snapshot for this turn (time, location, schedule, system,
-  // weather) — cheap: local reads plus the cached weather feed, with the
-  // weather fetch capped so a cold/slow fetch never stalls the chat.
-  const weatherContext = await getAwarenessContext()
-  // Optional per-turn context (memory + live web search) rides after awareness.
-  const systemContent = [SYSTEM_PROMPT, weatherContext, extraContext].filter(Boolean).join('\n\n')
+// One request to one provider, with the single short-window 429 retry.
+// Never throws — the caller decides whether a failure fails over or surfaces.
+// quotaMs is set ONLY for genuine quota exhaustion (429 with a Retry-After
+// beyond the retry ceiling): that provider goes into cooldown for that long.
+type ProviderAttempt =
+  | { ok: true; content: string }
+  | { ok: false; error: GroqConfigError | GroqRequestError; quotaMs?: number }
 
-  const requestBody: Record<string, unknown> = {
-    model,
-    messages: [{ role: 'system', content: systemContent }, ...trimHistoryForPrompt(history)],
-    temperature: 0.6,
-    max_tokens: MAX_REPLY_TOKENS
-  }
-  // gpt-oss models spend max_tokens on reasoning before the visible reply;
-  // low effort keeps the deliberation short so the tighter cap stays safe.
-  if (model.includes('gpt-oss')) {
-    requestBody.reasoning_effort = 'low'
-  }
-
-  // Pace against the rolling TPM window BEFORE sending — prevents the 429
-  // instead of reacting to it. Charged once per turn (the retry below reuses
-  // the same reservation).
-  await reserveTpmBudget(
-    estimateTpmCharge(requestBody.messages as Array<{ content: string }>, MAX_REPLY_TOKENS)
-  )
-
+async function attemptChatCompletion(
+  provider: ChatProvider,
+  requestBody: Record<string, unknown>
+): Promise<ProviderAttempt> {
+  const tag = `[${provider.name}]`
   let response: Response
   for (let attempt = 0; ; attempt++) {
     try {
-      response = await fetch(`${baseUrl}/chat/completions`, {
+      response = await fetch(`${provider.baseUrl()}/chat/completions`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json'
+          Authorization: `Bearer ${provider.apiKey()}`,
+          'Content-Type': 'application/json',
+          ...provider.extraHeaders()
         },
         body: JSON.stringify(requestBody),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
@@ -188,55 +175,170 @@ export async function requestGroqReply(
         error instanceof Error &&
         (error.name === 'TimeoutError' || error.name === 'AbortError')
       ) {
-        console.error('[groq] request timed out')
-        throw new GroqRequestError('AI backend timed out. Try again.')
+        console.error(`${tag} request timed out`)
+        return { ok: false, error: new GroqRequestError('AI backend timed out. Try again.') }
       }
-      console.error('[groq] network error', error)
-      throw new GroqRequestError('Could not reach the AI backend. Check your network connection.')
+      console.error(`${tag} network error`, error)
+      return {
+        ok: false,
+        error: new GroqRequestError(
+          'Could not reach the AI backend. Check your network connection.'
+        )
+      }
     }
 
     // Temporary rate limit: wait once for the advertised window and retry.
-    // Anything longer than the cap is real quota exhaustion — honest error.
+    // Anything longer than the cap is real quota exhaustion — hand the
+    // window back so the chain can cool this provider down and fail over.
     if (response.status === 429 && attempt === 0) {
       const waitMs = retryWaitMs(response)
       if (waitMs <= RETRY_MAX_WAIT_MS) {
-        console.error(`[groq] 429 — retrying once after ${waitMs}ms`)
+        console.error(`${tag} 429 — retrying once after ${waitMs}ms`)
         await new Promise((resolve) => setTimeout(resolve, waitMs))
         continue
       }
-      console.error(`[groq] 429 with retry-after ${waitMs}ms — limit exhausted, not retrying`)
+      console.error(`${tag} 429 with retry-after ${waitMs}ms — limit exhausted, not retrying`)
+      return {
+        ok: false,
+        error: new GroqRequestError('AI backend rate limit reached. Try again shortly.'),
+        quotaMs: waitMs
+      }
     }
     break
   }
 
   if (!response.ok) {
     const bodyText = await response.text().catch(() => '')
-    console.error('[groq] request failed', response.status, bodyText)
+    console.error(`${tag} request failed`, response.status, bodyText)
 
     if (response.status === 401 || response.status === 403) {
-      throw new GroqConfigError('AI backend rejected the API key. Check GROQ_API_KEY.')
+      return {
+        ok: false,
+        error: new GroqConfigError(
+          `AI backend rejected the API key. Check ${provider.name.toUpperCase()}_API_KEY.`
+        )
+      }
     }
     if (response.status === 429) {
-      throw new GroqRequestError('AI backend rate limit reached. Try again shortly.')
+      return {
+        ok: false,
+        error: new GroqRequestError('AI backend rate limit reached. Try again shortly.')
+      }
     }
-    throw new GroqRequestError(`AI backend returned an error (status ${response.status}).`)
+    return {
+      ok: false,
+      error: new GroqRequestError(`AI backend returned an error (status ${response.status}).`)
+    }
   }
 
   let data: unknown
   try {
     data = await response.json()
   } catch (error) {
-    console.error('[groq] invalid JSON in response', error)
-    throw new GroqRequestError('AI backend returned an unreadable response.')
+    console.error(`${tag} invalid JSON in response`, error)
+    return { ok: false, error: new GroqRequestError('AI backend returned an unreadable response.') }
   }
 
   const content = (data as { choices?: Array<{ message?: { content?: unknown } }> })?.choices?.[0]
     ?.message?.content
 
   if (typeof content !== 'string' || content.trim().length === 0) {
-    console.error('[groq] unexpected response shape', data)
-    throw new GroqRequestError('AI backend returned an empty response.')
+    console.error(`${tag} unexpected response shape`, data)
+    return { ok: false, error: new GroqRequestError('AI backend returned an empty response.') }
   }
 
-  return content
+  return { ok: true, content }
+}
+
+/**
+ * Main chat request with automatic free-provider failover.
+ *
+ * `extraContext` (live web search) goes to every provider; `privateContext`
+ * (persistent memory) is withheld from providers whose free tier may train
+ * on prompts (Gemini). Apart from that one omission, every provider receives
+ * the byte-identical persona, awareness, context, and history — the envelope
+ * contract does not change with the transport.
+ *
+ * Failover happens within the turn: quota-exhausted providers (429 with a
+ * long Retry-After) go into cooldown for the advertised window and are
+ * skipped until it lapses, then probed again automatically — no restart, no
+ * .env change. Transient failures (5xx/timeout/network/empty) fail over this
+ * turn but are re-tried next turn. If nothing can serve, the error is honest.
+ */
+export async function requestGroqReply(
+  history: ChatTurn[],
+  extraContext?: string,
+  privateContext?: string
+): Promise<string> {
+  const chain = providerChain()
+  if (chain.length === 0) {
+    throw new GroqConfigError(
+      'AI backend is not configured. Set GROQ_API_KEY in your environment (see .env.example) and restart JARVIS.'
+    )
+  }
+  // Awareness snapshot for this turn (time, location, schedule, system,
+  // weather) — cheap: local reads plus the cached weather feed, with the
+  // weather fetch capped so a cold/slow fetch never stalls the chat.
+  const weatherContext = await getAwarenessContext()
+  const trimmedHistory = trimHistoryForPrompt(history)
+
+  let lastError: GroqConfigError | GroqRequestError | null = null
+  for (let index = 0; index < chain.length; index++) {
+    const provider = chain[index]
+    if (isCoolingDown(provider.name)) continue
+    const wasCooling = clearLapsedCooldown(provider.name)
+
+    // Per-turn context (memory + live web search) rides after awareness, in
+    // the same order as always; memory is dropped for omitPrivateContext.
+    const systemContent = [
+      SYSTEM_PROMPT,
+      weatherContext,
+      provider.omitPrivateContext ? undefined : privateContext,
+      extraContext
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+    const model = provider.model()
+    const requestBody: Record<string, unknown> = {
+      model,
+      messages: [{ role: 'system', content: systemContent }, ...trimmedHistory],
+      temperature: 0.6,
+      max_tokens: MAX_REPLY_TOKENS
+    }
+    // gpt-oss models spend max_tokens on reasoning before the visible reply;
+    // low effort keeps the deliberation short so the tighter cap stays safe.
+    // (Gemini's compat endpoint gets no gpt-oss-specific knobs.)
+    if (model.includes('gpt-oss')) {
+      requestBody.reasoning_effort = 'low'
+    }
+
+    // Pace against Groq's rolling TPM window BEFORE sending — prevents the
+    // 429 instead of reacting to it. Groq-specific: the fallbacks are
+    // request-count limited far above conversational speed.
+    if (provider.name === 'groq') {
+      await reserveTpmBudget(
+        estimateTpmCharge(requestBody.messages as Array<{ content: string }>, MAX_REPLY_TOKENS)
+      )
+    }
+
+    const attempt = await attemptChatCompletion(provider, requestBody)
+    if (attempt.ok) {
+      if (wasCooling) console.log(`[ai] ${provider.name} recovered — back in service`)
+      if (provider.name !== 'groq') console.log(`[ai] reply served by ${provider.name}`)
+      return attempt.content
+    }
+    lastError = attempt.error
+    if (attempt.quotaMs !== undefined) {
+      setProviderCooldown(provider.name, attempt.quotaMs)
+      const next = chain.slice(index + 1).find((candidate) => !isCoolingDown(candidate.name))
+      console.log(
+        `[ai] ${provider.name} exhausted (retry-after ${Math.round(attempt.quotaMs / 1000)}s) — ` +
+          (next ? `failing over to ${next.name}` : 'no fallback available')
+      )
+    }
+  }
+
+  // Nothing served: surface the last real failure, or — when every provider
+  // was already cooling down — the honest rate-limit message.
+  throw lastError ?? new GroqRequestError('AI backend rate limit reached. Try again shortly.')
 }
