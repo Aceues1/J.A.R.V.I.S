@@ -1,25 +1,39 @@
 import { elevenLabsProvider } from './elevenlabs'
 import { groqPlayAiProvider } from './groq-playai'
+import { localKokoroProvider } from './local-kokoro'
 import { TtsConfigError, type TtsAudio, type TtsProvider } from './types'
 
 export { TtsConfigError, TtsRequestError } from './types'
+export { warmUpLocalTts } from './local-kokoro'
 
 // Long replies are truncated for speech only — the full text still renders in
 // the conversation. Keeps per-reply synthesis cost and latency bounded.
 export const MAX_SPEAK_TEXT_LENGTH = 2000
 
 const PROVIDERS: Record<string, TtsProvider> = {
+  [localKokoroProvider.name]: localKokoroProvider,
   [elevenLabsProvider.name]: elevenLabsProvider,
   [groqPlayAiProvider.name]: groqPlayAiProvider
 }
 
-// TTS_PROVIDER pins a provider explicitly ('elevenlabs', 'groq', or 'off').
-// Unset, the best configured provider wins: ElevenLabs when its key is
-// present, otherwise Groq PlayAI on the existing GROQ_API_KEY.
+// TTS_PROVIDER pins a provider explicitly ('local', 'elevenlabs', 'groq', or
+// 'off'). Unset, the best configured provider wins: local Kokoro when
+// LOCAL_TTS is on (no key needed), then ElevenLabs when its key is present,
+// otherwise Groq PlayAI on the existing GROQ_API_KEY.
 export function resolveTtsProvider(): TtsProvider | null {
   const preference = (process.env.TTS_PROVIDER || '').trim().toLowerCase()
   if (preference === 'off' || preference === 'none') return null
   if (preference in PROVIDERS) return PROVIDERS[preference]
+  if (localKokoroProvider.isConfigured()) return localKokoroProvider
+  if (elevenLabsProvider.isConfigured()) return elevenLabsProvider
+  if (groqPlayAiProvider.isConfigured()) return groqPlayAiProvider
+  return null
+}
+
+// The cloud chain behind the local voice, in the existing priority order.
+// Cloud provider semantics are unchanged — only the local provider falls
+// back, so cloud-only setups behave exactly as before this provider existed.
+function resolveCloudFallback(): TtsProvider | null {
   if (elevenLabsProvider.isConfigured()) return elevenLabsProvider
   if (groqPlayAiProvider.isConfigured()) return groqPlayAiProvider
   return null
@@ -67,5 +81,20 @@ export async function synthesizeSpeech(text: string): Promise<TtsAudio> {
   if (!provider || !provider.isConfigured()) {
     throw new TtsConfigError('Voice output is not configured.')
   }
-  return provider.synthesize(text)
+  if (provider.name !== localKokoroProvider.name) {
+    return provider.synthesize(text)
+  }
+  // Local voice first; when it cannot serve (model still loading, first-run
+  // download, load failure) the existing cloud chain speaks instead, so the
+  // reply is never silent just because the local model is not ready yet.
+  // When local succeeds, the text never leaves this machine.
+  try {
+    return await provider.synthesize(text)
+  } catch (error) {
+    const fallback = resolveCloudFallback()
+    if (!fallback) throw error
+    const reason = error instanceof Error ? error.message : 'unknown error'
+    console.log(`[tts] local voice unavailable (${reason}) — falling back to ${fallback.name}`)
+    return fallback.synthesize(text)
+  }
 }

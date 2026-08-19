@@ -11,7 +11,8 @@ import {
   TtsRequestError,
   getTtsStatus,
   synthesizeSpeech,
-  validateSpeakPayload
+  validateSpeakPayload,
+  warmUpLocalTts
 } from './tts'
 import { WeatherError, getWeatherReport } from './weather'
 import { getSystemStatus } from './awareness'
@@ -112,6 +113,11 @@ app.whenReady().then(() => {
   // in this process; the renderer only ever sees track/artist/state info.
   registerSpotifyDir(app.getPath('userData'))
   registerSpotifyOpener((url) => shell.openExternal(url))
+
+  // Local TTS: start the background Kokoro model load now (no-op unless
+  // LOCAL_TTS=on) so the voice is usually ready before the first reply.
+  // Never blocks startup; speech falls back to the cloud chain until ready.
+  warmUpLocalTts()
   registerSpotifyStatePush((state) => {
     for (const window of BrowserWindow.getAllWindows()) {
       window.webContents.send('spotify:state', state)
