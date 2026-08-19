@@ -24,6 +24,13 @@ export interface ChatProvider {
   baseUrl(): string
   apiKey(): string | undefined
   model(): string
+  /**
+   * Authentication for this provider — exactly one scheme, never both.
+   * Google's new AQ.-format keys are rejected by Bearer auth on the
+   * OpenAI-compatible route, so Gemini authenticates with the native
+   * x-goog-api-key header instead.
+   */
+  authHeaders(): Record<string, string>
   extraHeaders(): Record<string, string>
 }
 
@@ -33,6 +40,7 @@ const groqProvider: ChatProvider = {
   baseUrl: () => process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1',
   apiKey: () => process.env.GROQ_API_KEY || undefined,
   model: () => process.env.GROQ_MODEL || 'openai/gpt-oss-120b',
+  authHeaders: () => ({ Authorization: `Bearer ${process.env.GROQ_API_KEY}` }),
   extraHeaders: () => ({})
 }
 
@@ -41,7 +49,12 @@ const openRouterProvider: ChatProvider = {
   omitPrivateContext: false,
   baseUrl: () => process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
   apiKey: () => process.env.OPENROUTER_API_KEY || undefined,
-  model: () => process.env.OPENROUTER_MODEL || 'openai/gpt-oss-120b:free',
+  // openrouter/free is OpenRouter's own rotating router over whatever free
+  // models are currently live — individual ":free" slugs get delisted
+  // without notice (gpt-oss-120b:free died Aug 2026), this alias does not.
+  // Pin OPENROUTER_MODEL to a specific slug whenever a good one exists.
+  model: () => process.env.OPENROUTER_MODEL || 'openrouter/free',
+  authHeaders: () => ({ Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}` }),
   // Optional app attribution per OpenRouter docs — a label, never data.
   extraHeaders: () => ({ 'X-Title': 'JARVIS' })
 }
@@ -53,6 +66,9 @@ const geminiProvider: ChatProvider = {
     process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/openai',
   apiKey: () => process.env.GEMINI_API_KEY || undefined,
   model: () => process.env.GEMINI_MODEL || 'gemini-flash-latest',
+  // Native Google auth header — works for both AIza and new AQ. keys, where
+  // Bearer auth rejects the new format ("Please pass a valid API key").
+  authHeaders: () => ({ 'x-goog-api-key': process.env.GEMINI_API_KEY || '' }),
   extraHeaders: () => ({})
 }
 

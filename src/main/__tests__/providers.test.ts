@@ -73,38 +73,55 @@ function installFetch(queues: {
   gem?: FakeResponse[]
 }): {
   bodies: { groq: string[]; or: string[]; gem: string[] }
+  headers: {
+    groq: Array<Record<string, string>>
+    or: Array<Record<string, string>>
+    gem: Array<Record<string, string>>
+  }
   fetchMock: ReturnType<typeof vi.fn>
 } {
   const bodies = { groq: [] as string[], or: [] as string[], gem: [] as string[] }
+  const headers = {
+    groq: [] as Array<Record<string, string>>,
+    or: [] as Array<Record<string, string>>,
+    gem: [] as Array<Record<string, string>>
+  }
   const next = (queue?: FakeResponse[]): FakeResponse =>
     queue && queue.length > 1 ? queue.shift()! : (queue?.[0] ?? reply('unexpected'))
-  const fetchMock = vi.fn().mockImplementation((url: string, init?: { body?: string }) => {
-    const target = String(url)
-    if (target.includes('/forecast')) {
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        headers: { get: () => null },
-        text: () => Promise.resolve(JSON.stringify(weatherBody)),
-        json: () => Promise.resolve(weatherBody)
-      })
-    }
-    if (target.startsWith(GROQ)) {
-      bodies.groq.push(init?.body ?? '')
-      return Promise.resolve(next(queues.groq))
-    }
-    if (target.startsWith(OR)) {
-      bodies.or.push(init?.body ?? '')
-      return Promise.resolve(next(queues.or))
-    }
-    if (target.startsWith(GEM)) {
-      bodies.gem.push(init?.body ?? '')
-      return Promise.resolve(next(queues.gem))
-    }
-    throw new Error(`unexpected fetch to ${target}`)
-  })
+  const fetchMock = vi
+    .fn()
+    .mockImplementation(
+      (url: string, init?: { body?: string; headers?: Record<string, string> }) => {
+        const target = String(url)
+        if (target.includes('/forecast')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            headers: { get: () => null },
+            text: () => Promise.resolve(JSON.stringify(weatherBody)),
+            json: () => Promise.resolve(weatherBody)
+          })
+        }
+        if (target.startsWith(GROQ)) {
+          bodies.groq.push(init?.body ?? '')
+          headers.groq.push(init?.headers ?? {})
+          return Promise.resolve(next(queues.groq))
+        }
+        if (target.startsWith(OR)) {
+          bodies.or.push(init?.body ?? '')
+          headers.or.push(init?.headers ?? {})
+          return Promise.resolve(next(queues.or))
+        }
+        if (target.startsWith(GEM)) {
+          bodies.gem.push(init?.body ?? '')
+          headers.gem.push(init?.headers ?? {})
+          return Promise.resolve(next(queues.gem))
+        }
+        throw new Error(`unexpected fetch to ${target}`)
+      }
+    )
   vi.stubGlobal('fetch', fetchMock)
-  return { bodies, fetchMock }
+  return { bodies, headers, fetchMock }
 }
 
 const QUOTA_429 = (): FakeResponse => failure(429, '86400')
@@ -140,8 +157,15 @@ describe('provider chain composition', () => {
   it('uses the documented free-tier default models', () => {
     const [groq, or, gem] = providerChain()
     expect(groq.model()).toBe('openai/gpt-oss-120b')
-    expect(or.model()).toBe('openai/gpt-oss-120b:free')
+    // openrouter/free is OpenRouter's rotating router over currently-live
+    // free models — individual ":free" slugs get delisted without notice.
+    expect(or.model()).toBe('openrouter/free')
     expect(gem.model()).toBe('gemini-flash-latest')
+  })
+
+  it('honors an OPENROUTER_MODEL pin', () => {
+    vi.stubEnv('OPENROUTER_MODEL', 'some-vendor/some-model:free')
+    expect(providerChain()[1].model()).toBe('some-vendor/some-model:free')
   })
 })
 
@@ -234,7 +258,62 @@ describe('Gemini fallback privacy and request shape', () => {
     // And no gpt-oss-specific knobs on the compat endpoint.
     expect(gemBody.model).toBe('gemini-flash-latest')
     expect(gemBody).not.toHaveProperty('reasoning_effort')
-    expect(JSON.parse(bodies.or[0])).toHaveProperty('reasoning_effort', 'low')
+    // The gpt-oss reasoning knob rides only with gpt-oss models: groq yes,
+    // the openrouter/free router (unknown model family) no.
+    expect(JSON.parse(bodies.groq[0])).toHaveProperty('reasoning_effort', 'low')
+    expect(JSON.parse(bodies.or[0])).not.toHaveProperty('reasoning_effort')
+  })
+})
+
+describe('per-provider authentication', () => {
+  it('authenticates Gemini with x-goog-api-key and never a Bearer header', async () => {
+    const { headers } = installFetch({
+      groq: [QUOTA_429()],
+      or: [QUOTA_429()],
+      gem: [reply('Via Gemini, sir.')]
+    })
+    await expect(requestGroqReply(history)).resolves.toBe('Via Gemini, sir.')
+    expect(headers.gem[0]['x-goog-api-key']).toBe('gem-secret-key')
+    expect(headers.gem[0]).not.toHaveProperty('Authorization')
+    // Groq and OpenRouter keep standard Bearer auth (and no Google header).
+    expect(headers.groq[0]['Authorization']).toBe('Bearer groq-secret-key')
+    expect(headers.groq[0]).not.toHaveProperty('x-goog-api-key')
+    expect(headers.or[0]['Authorization']).toBe('Bearer or-secret-key')
+    expect(headers.or[0]).not.toHaveProperty('x-goog-api-key')
+  })
+})
+
+describe('OpenRouter delisted-model 404', () => {
+  const model404 = (): FakeResponse => ({
+    ok: false,
+    status: 404,
+    headers: { get: () => null },
+    text: () =>
+      Promise.resolve(
+        '{"error":{"message":"This model is unavailable for free. The paid version is ' +
+          'available now - use this slug instead: openai/gpt-oss-120b","code":404}}'
+      ),
+    json: () => Promise.resolve({})
+  })
+
+  it('cools the provider down instead of hammering it every turn', async () => {
+    const { bodies } = installFetch({
+      groq: [QUOTA_429()],
+      or: [model404()],
+      gem: [reply('Via Gemini, sir.')]
+    })
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await expect(requestGroqReply(history)).resolves.toBe('Via Gemini, sir.')
+    expect(isCoolingDown('openrouter')).toBe(true)
+
+    // Next turn: the dead-model provider is skipped entirely.
+    await expect(requestGroqReply(history)).resolves.toBe('Via Gemini, sir.')
+    expect(bodies.or).toHaveLength(1)
+    // The log advises the override knob, naming no secrets.
+    const logged = errorSpy.mock.calls.flat().map(String).join('\n')
+    expect(logged).toContain('Set OPENROUTER_MODEL to a current model')
+    expect(logged).not.toContain('or-secret-key')
   })
 })
 

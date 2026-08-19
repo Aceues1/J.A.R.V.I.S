@@ -2,6 +2,7 @@ import type { ChatTurn } from './chat-validation'
 import { SYSTEM_PROMPT } from './persona'
 import { getAwarenessContext } from './awareness'
 import {
+  MAX_COOLDOWN_MS,
   clearLapsedCooldown,
   isCoolingDown,
   providerChain,
@@ -146,11 +147,18 @@ function retryWaitMs(response: Response): number {
 
 // One request to one provider, with the single short-window 429 retry.
 // Never throws — the caller decides whether a failure fails over or surfaces.
-// quotaMs is set ONLY for genuine quota exhaustion (429 with a Retry-After
-// beyond the retry ceiling): that provider goes into cooldown for that long.
+// cooldownMs is set only when re-calling the provider soon is pointless:
+// 'quota' = 429 with a Retry-After beyond the retry ceiling (rest exactly
+// that long); 'model' = the configured model itself is rejected (404 — e.g.
+// a delisted OpenRouter free slug), which won't heal within the session.
 type ProviderAttempt =
   | { ok: true; content: string }
-  | { ok: false; error: GroqConfigError | GroqRequestError; quotaMs?: number }
+  | {
+      ok: false
+      error: GroqConfigError | GroqRequestError
+      cooldownMs?: number
+      cooldownReason?: 'quota' | 'model'
+    }
 
 async function attemptChatCompletion(
   provider: ChatProvider,
@@ -163,7 +171,9 @@ async function attemptChatCompletion(
       response = await fetch(`${provider.baseUrl()}/chat/completions`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${provider.apiKey()}`,
+          // Exactly one auth scheme per provider (Gemini's compat endpoint
+          // rejects requests carrying both Bearer and the native header).
+          ...provider.authHeaders(),
           'Content-Type': 'application/json',
           ...provider.extraHeaders()
         },
@@ -201,7 +211,8 @@ async function attemptChatCompletion(
       return {
         ok: false,
         error: new GroqRequestError('AI backend rate limit reached. Try again shortly.'),
-        quotaMs: waitMs
+        cooldownMs: waitMs,
+        cooldownReason: 'quota'
       }
     }
     break
@@ -223,6 +234,21 @@ async function attemptChatCompletion(
       return {
         ok: false,
         error: new GroqRequestError('AI backend rate limit reached. Try again shortly.')
+      }
+    }
+    if (response.status === 404) {
+      // The configured model itself is gone (delisted free slug, renamed,
+      // decommissioned). Re-calling every turn is pointless — rest the
+      // provider and advise the override knob in the log, never in errors.
+      console.error(
+        `${tag} model not available — cooling this provider down. ` +
+          `Set ${provider.name.toUpperCase()}_MODEL to a current model to override.`
+      )
+      return {
+        ok: false,
+        error: new GroqRequestError(`AI backend returned an error (status 404).`),
+        cooldownMs: MAX_COOLDOWN_MS,
+        cooldownReason: 'model'
       }
     }
     return {
@@ -328,11 +354,15 @@ export async function requestGroqReply(
       return attempt.content
     }
     lastError = attempt.error
-    if (attempt.quotaMs !== undefined) {
-      setProviderCooldown(provider.name, attempt.quotaMs)
+    if (attempt.cooldownMs !== undefined) {
+      setProviderCooldown(provider.name, attempt.cooldownMs)
       const next = chain.slice(index + 1).find((candidate) => !isCoolingDown(candidate.name))
+      const cause =
+        attempt.cooldownReason === 'model'
+          ? 'model unavailable — cooling down'
+          : `exhausted (retry-after ${Math.round(attempt.cooldownMs / 1000)}s)`
       console.log(
-        `[ai] ${provider.name} exhausted (retry-after ${Math.round(attempt.quotaMs / 1000)}s) — ` +
+        `[ai] ${provider.name} ${cause} — ` +
           (next ? `failing over to ${next.name}` : 'no fallback available')
       )
     }

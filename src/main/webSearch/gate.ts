@@ -7,6 +7,7 @@
 
 import type { ChatTurn } from '../chat-validation'
 import { getApiKey } from '../groq'
+import { extractFailedGeneration } from '../groq-recovery'
 
 const DEFAULT_BASE_URL = 'https://api.groq.com/openai/v1'
 // Small, fast model for the yes/no gate; override with GROQ_GATE_MODEL.
@@ -17,9 +18,10 @@ const FALLBACK_GATE_MODEL = (): string => process.env.GROQ_MODEL || 'openai/gpt-
 const GATE_TIMEOUT_MS = 10_000
 // gpt-oss are REASONING models: max_tokens caps reasoning + answer combined.
 // A tight cap starves the reasoning channel and returns EMPTY content, which
-// silently fails the gate closed. Keep generous headroom — the visible JSON
-// answer itself is tiny.
-const GATE_MAX_TOKENS = 768
+// silently fails the gate closed — and in json_object mode a mid-JSON
+// truncation becomes a 400 json_validate_failed. Keep generous headroom —
+// the visible JSON answer itself is tiny.
+const GATE_MAX_TOKENS = 1024
 // Enough turns to resolve "them"/"it" without shipping the whole transcript.
 const GATE_HISTORY_TURNS = 6
 const GATE_TURN_MAX_CHARS = 300
@@ -181,9 +183,24 @@ async function callGateModel(
     if (!response.ok) {
       const errorText = await response.text().catch(() => '')
       console.error(`[websearch:gate] HTTP ${response.status}: ${errorText.slice(0, 200)}`)
-      // 4xx = this model/parameter combination is rejected — retry once with
-      // the main chat model before giving up. Repeated rejections make the
-      // fallback sticky so future turns cost a single call again.
+      // json_object mode on Groq is generate-then-validate: a truncated or
+      // slightly-off output 400s with json_validate_failed, but the error
+      // body carries the model's actual text in failed_generation — usually
+      // the JSON we wanted. Recover it with the lenient parser instead of
+      // retrying, and never count this generation hiccup toward stickiness
+      // (that would pin the gate to the big model over a flaky turn).
+      const failedGeneration = extractFailedGeneration(errorText)
+      if (failedGeneration !== null) {
+        const recovered = parseGateReply(failedGeneration)
+        if (recovered) {
+          console.log('[websearch:gate] recovered decision from failed_generation')
+          return recovered
+        }
+        return null
+      }
+      // Other 4xx = this model/parameter combination is rejected — retry once
+      // with the main chat model before giving up. Repeated rejections make
+      // the fallback sticky so future turns cost a single call again.
       const fallback = FALLBACK_GATE_MODEL()
       if (allowModelFallback && response.status < 500 && model !== fallback) {
         primaryGateFailures += 1

@@ -7,6 +7,7 @@
 
 import type { ChatTurn } from '../chat-validation'
 import { getApiKey } from '../groq'
+import { extractFailedGeneration } from '../groq-recovery'
 import { isMemoryType, MAX_CONTENT_CHARS, type MemoryEntry, type MemoryType } from './types'
 
 const DEFAULT_BASE_URL = 'https://api.groq.com/openai/v1'
@@ -163,8 +164,22 @@ async function callCurator(
     if (!response.ok) {
       const errorText = await response.text().catch(() => '')
       console.error('[memory:extract] HTTP', response.status, errorText.slice(0, 200))
-      // 4xx = this model/parameter combination is rejected — one retry with
-      // the main chat model, mirroring the search gate.
+      // json_validate_failed carries the model's actual output in
+      // failed_generation — recover the ops from it with the lenient parser
+      // instead of retrying with the big model (mirrors the search gate).
+      const failedGeneration = extractFailedGeneration(errorText)
+      if (failedGeneration !== null) {
+        if (failedGeneration) {
+          const recovered = parseCuratorReply(failedGeneration, existing)
+          if (recovered.length > 0 || /"ops"\s*:\s*\[\s*\]/.test(failedGeneration)) {
+            console.log('[memory:extract] recovered ops from failed_generation')
+            return recovered
+          }
+        }
+        return null
+      }
+      // Other 4xx = this model/parameter combination is rejected — one retry
+      // with the main chat model, mirroring the search gate.
       const fallback = FALLBACK_CURATOR_MODEL()
       if (allowModelFallback && response.status < 500 && model !== fallback) {
         console.error(`[memory:extract] retrying with main chat model ${fallback}`)

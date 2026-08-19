@@ -233,3 +233,54 @@ describe('requestMemoryOps', () => {
     ).resolves.toEqual([{ op: 'add', type: 'fact', content: 'User lives in Norway' }])
   })
 })
+
+describe('failed_generation recovery (json_validate_failed)', () => {
+  function jsonValidateFailed(failedGeneration: string): object {
+    return {
+      ok: false,
+      status: 400,
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            error: { code: 'json_validate_failed', failed_generation: failedGeneration }
+          })
+        ),
+      json: () => Promise.reject(new Error('unused'))
+    }
+  }
+
+  it('recovers curator ops from failed_generation without a 120b retry', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonValidateFailed(
+          '{"ops":[{"op":"update","id":"m-concise","content":"User prefers detailed answers"}]}'
+        )
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const ops = await requestMemoryOps(
+      [{ role: 'user', content: 'I actually want detailed answers now.' }],
+      existing
+    )
+    expect(ops).toEqual([
+      { op: 'update', id: 'm-concise', content: 'User prefers detailed answers' }
+    ])
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('recovers an explicit empty ops list as success, not failure', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonValidateFailed('{"ops":[]}')))
+    await expect(
+      requestMemoryOps([{ role: 'user', content: 'Nothing to store here.' }], existing)
+    ).resolves.toEqual([])
+  })
+
+  it('reports honest failure (null) when failed_generation is unusable', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonValidateFailed('no json at all'))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(
+      requestMemoryOps([{ role: 'user', content: 'Remember that my dog is named Rex.' }], existing)
+    ).resolves.toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(1) // no fallback-model retry either
+  })
+})

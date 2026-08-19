@@ -274,3 +274,85 @@ describe('runSearchGate', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('json_validate_failed recovery', () => {
+  function jsonValidateFailed(failedGeneration: string): object {
+    return {
+      ok: false,
+      status: 400,
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            error: {
+              code: 'json_validate_failed',
+              message: 'Failed to validate JSON. Please adjust your prompt.',
+              failed_generation: failedGeneration
+            }
+          })
+        ),
+      json: () => Promise.reject(new Error('unused'))
+    }
+  }
+
+  function fetchQueue(responses: object[]): ReturnType<typeof vi.fn> {
+    const queue = [...responses]
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(queue.length > 1 ? queue.shift() : queue[0]))
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  const ok = (content: string): object => ({
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve({ choices: [{ message: { content } }] })
+  })
+
+  it('recovers the decision from failed_generation without any retry', async () => {
+    const fetchMock = fetchQueue([
+      jsonValidateFailed('{"search":true,"query":"latest OpenAI news"}')
+    ])
+    await expect(runSearchGate([user('any OpenAI news today?')])).resolves.toEqual({
+      search: true,
+      query: 'latest OpenAI news'
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1) // no 120b fallback call
+  })
+
+  it('recovers from a fenced/dirty failed_generation via the lenient parser', async () => {
+    fetchQueue([jsonValidateFailed('```json\n{"search":false}\n```')])
+    await expect(runSearchGate([user('is water wet, technically?')])).resolves.toEqual({
+      search: false
+    })
+  })
+
+  it('fails closed without fallback when failed_generation is unusable', async () => {
+    const fetchMock = fetchQueue([jsonValidateFailed('total garbage, no json here')])
+    await expect(runSearchGate([user('what is bitcoin at right now?')])).resolves.toEqual({
+      search: false
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('never counts validation hiccups toward stickiness — gate model survives', async () => {
+    const fetchMock = fetchQueue([
+      jsonValidateFailed('garbage'),
+      jsonValidateFailed('garbage'),
+      ok('{"search":false}')
+    ])
+    await runSearchGate([user('price of ethereum right now?')])
+    await runSearchGate([user('latest nvidia news?')])
+    // Two validation failures must NOT pin the session to the 120b fallback.
+    await runSearchGate([user('who won the match yesterday?')])
+    const thirdBody = JSON.parse(fetchMock.mock.calls[2][1].body)
+    expect(thirdBody.model).toBe('openai/gpt-oss-20b')
+  })
+
+  it('sends the 1024-token gate budget', async () => {
+    const fetchMock = gateReply('{"search":false}')
+    await runSearchGate([user('what is the capital of France, currently?')])
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body.max_tokens).toBe(1024)
+  })
+})
